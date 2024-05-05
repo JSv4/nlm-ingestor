@@ -20,6 +20,7 @@ doc_loc = 'sample.pdf'
 
 # This would be called by ingestor_api.py if mime_type == "application/pdf"
 ingestor = pdf_ingestor.PDFIngestor(doc_loc, {"apply_ocr": False})
+print(ingestor.return_dict)
 
 # This then calls tika_html_doc = parse_pdf(doc_location, parse_options), which is part of
 # pdf_ingestor.py...
