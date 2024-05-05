@@ -59,6 +59,7 @@ def parse_pdf(doc_location, parse_options):
         wall_time = default_timer() * 1000
         logger.info("Parsing PDF")
         parsed_content = pdf_file_parser.parse_to_html(doc_location)
+        print(f"Non-ocred parsed content: {parsed_content}")
         logger.info(
             f"PDF Parsing finished in {default_timer() * 1000 - wall_time:.4f}ms on workspace",
         )
@@ -79,12 +80,13 @@ def parse_pdf(doc_location, parse_options):
     else:
         wall_time = default_timer() * 1000
         parsed_content = pdf_file_parser.parse_to_html(doc_location, do_ocr=True)
+        print(f"Parsed OCRed content: {parsed_content}")
         parse_and_apply_hocr(parsed_content)
         logger.info(
             f"PDF OCR finished in {default_timer() * 1000 - wall_time:.4f}ms on workspace",
         )
     return parsed_content
-        
+
 
 def parse_and_apply_hocr(parsed_content):
     def get_kv_from_attr(attr_str, sep=" "):
@@ -102,11 +104,15 @@ def parse_and_apply_hocr(parsed_content):
 
     soup = BeautifulSoup(str(parsed_content), "html.parser")
     pages = soup.find_all("div", class_='page')
-    for page in pages:
+    pawls_pages = []
+
+    for index, page in enumerate(pages):
+
         page_kv = get_kv_from_attr(page.get('style'), ":")
         page_height = float(page_kv['height'].replace("px", ""))
         page_width = float(page_kv['width'].replace("px", ""))
         ocr_pages = page.find_all('div', class_='ocr_page')
+
         if len(ocr_pages) > 0:
             ocr_page = ocr_pages[0]
             ocr_page_kv = get_kv_from_attr(ocr_page.get('title'))
@@ -115,6 +121,16 @@ def parse_and_apply_hocr(parsed_content):
             x_scale = page_width / ocr_page_width
             y_scale = page_height / ocr_page_height
             lines = page.find_all('span', class_='ocr_line')
+
+            pawls_page = {
+                "page": {
+                    "width": ocr_page_width,
+                    "height": ocr_page_height,
+                    "index": index
+                },
+                "tokens": []
+            }
+
             for line in lines:
                 title = line.get('title')
                 p_tag = soup.new_tag("p")
@@ -125,7 +141,7 @@ def parse_and_apply_hocr(parsed_content):
                 y1 = float(line_kv['bbox'][1]) * y_scale
                 height = y1 - y0
                 font_size = float(line_kv['x_size']) * y_scale
-                font_size = 12
+                font_size = 12  # TODO - why is this hard-coded and overriding previous val?
                 p_tag.string = line.text.strip().replace("\\n*", "")
                 style = f"position: absolute; top:{y0}px; text-indent:{x0}px;"
                 style += f"height: {height};font-size:{font_size}px;"
@@ -140,6 +156,17 @@ def parse_and_apply_hocr(parsed_content):
                     word_y1 = float(word_kv['bbox'][1]) * y_scale
                     word_start_positions.append((word_x0, word_y0))
                     word_end_positions.append((word_x1, word_y1))
+
+                    # We want the tokens at the end so we can still annotate them and render them
+                    pawls_page['tokens'].append({
+                        "x": word_x0,
+                        "y": word_y0,
+                        "width": word_x1 - word_x0,
+                        "height": word_y1 - word_y0,
+                        "text": word.text
+                    })
+                    pawls_pages.append(pawls_page)
+
                 style += f"word-start-positions: {word_start_positions}; word-end-positions: {word_end_positions};"
                 default_font_family = "TimesNewRomanPSMT"
                 default_font = f"({default_font_family},normal,normal,{font_size},{font_size},{font_size / 4.0})"
@@ -147,12 +174,16 @@ def parse_and_apply_hocr(parsed_content):
                 style += f"font-family: {default_font_family};font-style: normal;font-weight: normal;word-fonts: [{word_fonts}]"
                 p_tag.attrs["style"] = style
                 page.append(p_tag)
+
             for ocr_block in page.find_all('div', class_='ocr'):
                 ocr_block.decompose()
+
     html_str = str(soup.html)
     html_str = html_str.replace("\\n", "")
     html_str = html_str.replace("\\t", "")
     parsed_content['content'] = html_str
+    parsed_content['pawls'] = pawls_pages
+
 
 def parse_blocks(
         tika_html_doc,
