@@ -2,8 +2,6 @@ import json
 import logging
 import re
 import numpy as np
-from collections import defaultdict, namedtuple
-from typing import Optional
 
 from bs4 import BeautifulSoup
 
@@ -19,6 +17,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 text_only_pattern = re.compile(r"[^a-zA-Z]+")
 
+
 class PDFIngestor:
     def __init__(self, doc_location, parse_options):
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -29,9 +28,9 @@ class PDFIngestor:
             if parse_options else "all"
         use_new_indent_parser = parse_options.get("use_new_indent_parser", False) \
             if parse_options else False
-        
+
         tika_html_doc = parse_pdf(doc_location, parse_options)
-        # print("tika_html_doc", tika_html_doc)
+
         blocks, _block_texts, _sents, _file_data, result, page_dim, num_pages = parse_blocks(
             tika_html_doc,
             render_format=render_format,
@@ -53,12 +52,39 @@ class PDFIngestor:
         self.blocks = blocks
 
 
+def get_kv_from_attr(attr_str, sep=" "):
+    #     print(attr_str)
+    kv_string = attr_str.split(";")
+    kvs = {}
+    for kv in kv_string:
+        parts = kv.strip().split(sep)
+        k = parts[0]
+        v = parts[1:]
+        if len(v) == 1:
+            v = v[0].strip()
+        kvs[k] = v
+    return kvs
+
+
+def get_word_positions(word_pos_str: str) -> list[tuple[float, float]]:
+    pattern = r'\(([-+]?\d*\.\d+),\s*([-+]?\d*\.\d+)\)'
+    tuples = re.findall(pattern, word_pos_str)
+    return [(float(x), float(y)) for x, y in tuples]
+
+
 def parse_pdf(doc_location, parse_options):
+    print(f"parse_pdf...")
+
     apply_ocr = parse_options.get("apply_ocr", False) if parse_options else False
     if not apply_ocr:
+        print("Not applying ocr")
         wall_time = default_timer() * 1000
         logger.info("Parsing PDF")
         parsed_content = pdf_file_parser.parse_to_html(doc_location)
+
+        # Testing parsing pawls from non-OCR
+        parse(parsed_content)
+
         print(f"Non-ocred parsed content: {parsed_content}")
         logger.info(
             f"PDF Parsing finished in {default_timer() * 1000 - wall_time:.4f}ms on workspace",
@@ -78,32 +104,91 @@ def parse_pdf(doc_location, parse_options):
                     f"Running PDF OCR: sparse_page_count: {sparse_page_count}, n_pages: {len(pages)}")
 
     else:
+        print("OCR!")
         wall_time = default_timer() * 1000
+        print(f"Get parsed content...")
         parsed_content = pdf_file_parser.parse_to_html(doc_location, do_ocr=True)
-        print(f"Parsed OCRed content: {parsed_content}")
+        print("parse_and_apply_hocr start...")
         parse_and_apply_hocr(parsed_content)
         logger.info(
             f"PDF OCR finished in {default_timer() * 1000 - wall_time:.4f}ms on workspace",
         )
+        print(f"Donzo")
     return parsed_content
 
 
+def parse(parsed_content):
+    print("parse no ocr")
+    soup = BeautifulSoup(str(parsed_content), "html.parser")
+    print(soup.prettify())
+    pages = soup.find_all("div", class_=lambda x: x not in ['annotation'])
+    print(f"There are {len(pages)} pages in doc")
+
+    pawls_pages = []
+
+    for index, page in enumerate(pages):
+
+        page_kv = get_kv_from_attr(page.get('style'), ":")
+        page_height = float(page_kv['height'].replace("px", ""))
+        print(f"Page {index + 1} height: {page_height}")
+        page_width = float(page_kv['width'].replace("px", ""))
+        print(f"Page {index + 1} width: {page_width}")
+
+        pawls_page = {
+            "page": {
+                "width": page_width,
+                "height": page_height,
+                "index": index
+            },
+            "tokens": []
+        }
+
+        ps = page.find_all("p")
+        for p in ps:
+            print(p)
+            p_kv = get_kv_from_attr(p.get('style'), ":")
+            print(f"\t{p_kv}")
+            words = p.text.split()
+            print(f"\tword count: {len(words)}")
+            print(f"\t" + p_kv.get("word-start-positions", '[]'))
+            word_start_positions_str = p_kv.get("word-start-positions", '[]')[1:-1]
+            print(f"word_start_positions_str: {word_start_positions_str}")
+            word_start_positions = get_word_positions(word_start_positions_str)
+            print(f"\t{len(word_start_positions)} word start positions")
+
+            word_end_positions_str = p_kv.get("word-end-positions", '[]')[1:-1]
+            word_end_positions = get_word_positions(word_end_positions_str)
+            print(f"\t{len(word_end_positions)} word end positions")
+
+            assert len(word_start_positions) == len(word_end_positions)
+            assert len(words) == len(word_start_positions)
+
+            for index, w in enumerate(words):
+                x0, y0 = word_start_positions[index]
+                x1, y1 = word_end_positions[index]
+                pawls_page['tokens'].append({
+                    "x": x0,
+                    "y": y0,
+                    "width": y1 - y0,
+                    "height": x1 - x0,
+                    "text": w,
+                })
+
+        pawls_pages.append(pawls_page)
+
+    html_str = str(soup.html)
+
+    parsed_content['content'] = html_str
+    parsed_content['pawls'] = pawls_pages
+
+
 def parse_and_apply_hocr(parsed_content):
-    def get_kv_from_attr(attr_str, sep=" "):
-        #     print(attr_str)
-        kv_string = attr_str.split(";")
-        kvs = {}
-        for kv in kv_string:
-            parts = kv.strip().split(sep)
-            k = parts[0]
-            v = parts[1:]
-            if len(v) == 1:
-                v = v[0].strip()
-            kvs[k] = v
-        return kvs
+    print(f"parse_and_apply_hocr running...")
 
     soup = BeautifulSoup(str(parsed_content), "html.parser")
+    print(soup.prettify())
     pages = soup.find_all("div", class_='page')
+    print(f"Page count: {len(pages)}")
     pawls_pages = []
 
     for index, page in enumerate(pages):
@@ -114,6 +199,9 @@ def parse_and_apply_hocr(parsed_content):
         ocr_pages = page.find_all('div', class_='ocr_page')
 
         if len(ocr_pages) > 0:
+
+            print("Length of ocr_pages is > 0")
+
             ocr_page = ocr_pages[0]
             ocr_page_kv = get_kv_from_attr(ocr_page.get('title'))
             ocr_page_width = float(ocr_page_kv['bbox'][2])
@@ -135,6 +223,7 @@ def parse_and_apply_hocr(parsed_content):
                 title = line.get('title')
                 p_tag = soup.new_tag("p")
                 line_kv = get_kv_from_attr(title)
+                print(f"line_kv: {line_kv}")
                 x0 = float(line_kv['bbox'][0]) * x_scale
                 y0 = float(line_kv['bbox'][1]) * y_scale
                 x1 = float(line_kv['bbox'][0]) * x_scale
@@ -148,7 +237,10 @@ def parse_and_apply_hocr(parsed_content):
                 words = line.find_all('span', class_='ocrx_word')
                 word_start_positions = []
                 word_end_positions = []
+
                 for word in words:
+                    print(f"Handle word: {word}")
+
                     word_kv = get_kv_from_attr(word.get('title'))
                     word_x0 = float(word_kv['bbox'][0]) * x_scale
                     word_y0 = float(word_kv['bbox'][1]) * y_scale
@@ -177,12 +269,16 @@ def parse_and_apply_hocr(parsed_content):
 
             for ocr_block in page.find_all('div', class_='ocr'):
                 ocr_block.decompose()
+        else:
+            print("Length of OCR pages is 0")
 
     html_str = str(soup.html)
     html_str = html_str.replace("\\n", "")
     html_str = html_str.replace("\\t", "")
     parsed_content['content'] = html_str
     parsed_content['pawls'] = pawls_pages
+
+    print(f"Parsed content updated:\n{parsed_content}")
 
 
 def parse_blocks(
@@ -226,24 +322,25 @@ def parse_blocks(
     file_data = [json.dumps(res, cls=NpEncoder) for res in result]
 
     return blocks, block_texts, sents, file_data, \
-            result, [parsed_doc.page_width, parsed_doc.page_height], len(pages) - 1
+        result, [parsed_doc.page_width, parsed_doc.page_height], len(pages) - 1
+
 
 def top_pages_info(parsed_doc):
     font_freq = {}
     for idx, block in enumerate(parsed_doc.blocks):
-        if block["page_idx"] > 2:       # Consider only the first 2 pages
+        if block["page_idx"] > 2:  # Consider only the first 2 pages
             break
         if not block["block_type"] == "header" and not block["block_idx"] < 1:
             continue
         for line in block["visual_lines"]:
-            line_font = line["line_style"][2]       # font_size
+            line_font = line["line_style"][2]  # font_size
             line_text = line["text"]
             if line_font in font_freq:
                 font_freq[line_font].append({
                     "text": line_text,
                     "page": block["page_idx"],
                     "block_idx": block["block_idx"],
-                    "enum_idx": idx     # Adding enum_idx as the block_idx can be wrong here.
+                    "enum_idx": idx  # Adding enum_idx as the block_idx can be wrong here.
                 })
             else:
                 font_freq[line_font] = [
@@ -251,8 +348,8 @@ def top_pages_info(parsed_doc):
                         "text": line_text,
                         "page": block["page_idx"],
                         "block_idx": block["block_idx"],
-                        "enum_idx": idx     # Adding enum_idx as the block_idx can be wrong here.
-                     }
+                        "enum_idx": idx  # Adding enum_idx as the block_idx can be wrong here.
+                    }
                 ]
     # Sort the font_freq in descending order.
     sorted_freq = {}
