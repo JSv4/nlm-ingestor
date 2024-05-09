@@ -7,6 +7,8 @@ from bs4 import BeautifulSoup
 
 from nlm_ingestor.file_parser import pdf_file_parser
 from timeit import default_timer
+
+from .parsers import get_kv_from_attr, get_word_positions
 from .visual_ingestor import visual_ingestor
 from nlm_ingestor.ingestor.visual_ingestor.new_indent_parser import NewIndentParser
 from nlm_ingestor.ingestor_utils.utils import NpEncoder, \
@@ -51,25 +53,6 @@ class PDFIngestor:
         self.return_dict = return_dict
         self.file_data = _file_data
         self.blocks = blocks
-
-
-def get_kv_from_attr(attr_str, sep=" "):
-    kv_string = attr_str.split(";")
-    kvs = {}
-    for kv in kv_string:
-        parts = kv.strip().split(sep)
-        k = parts[0]
-        v = parts[1:]
-        if len(v) == 1:
-            v = v[0].strip()
-        kvs[k] = v
-    return kvs
-
-
-def get_word_positions(word_pos_str: str) -> list[tuple[float, float]]:
-    pattern = r'\(([-+]?\d*\.\d+),\s*([-+]?\d*\.\d+)\)'
-    tuples = re.findall(pattern, word_pos_str)
-    return [(float(x), float(y)) for x, y in tuples]
 
 
 def parse_pdf(doc_location, parse_options):
@@ -273,6 +256,7 @@ def parse_blocks(
         start_page_no, end_page_no = parse_pages
         pages = pages[start_page_no:end_page_no + 1]
     parsed_doc = visual_ingestor.Doc(pages, ignore_blocks, render_format)
+    print(parsed_doc.pawls_pages)
     if use_new_indent_parser:
         indent_parser = NewIndentParser(parsed_doc, parsed_doc.blocks)
         indent_parser.indent()
