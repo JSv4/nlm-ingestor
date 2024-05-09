@@ -13,10 +13,12 @@ from bs4 import BeautifulSoup
 from bs4.element import ResultSet
 from timeit import default_timer
 
+from nlm_ingestor.datatypes.dicts import PawlsPagePythonType
+from nlm_ingestor.ingestor import line_parser
+from nlm_ingestor.ingestor.parsers import get_word_positions, get_kv_from_attr
 from nlm_ingestor.ingestor_utils.utils import sent_tokenize
 from nlm_ingestor.ingestor_utils.ing_named_tuples import BoxStyle, LineStyle, LocationKey
 from nlm_ingestor.ingestor.visual_ingestor import style_utils, table_parser, indent_parser, block_renderer, order_fixer
-from nlm_ingestor.ingestor import line_parser
 from nlm_ingestor.ingestor_utils.parsing_utils import *
 from nlm_ingestor.ingestor.visual_ingestor import vi_helper_utils as vhu
 
@@ -83,8 +85,17 @@ def get_block_type(group_is_list, group_is_table_row, group_text):
 
 
 class Doc:
-    def __init__(self, pages: ResultSet, ignore_blocks: bool, render_format: str = "all", audited_bbox=None):
+    def __init__(
+            self,
+            pages: ResultSet,
+            ignore_blocks: bool,
+            render_format: str = "all",
+            audited_bbox=None
+    ):
+        print(f"Audited_bbox type {type(audited_bbox)}")
+
         self.pages = pages
+        self.pawls_pages: list[PawlsPagePythonType] = []
         self.line_style_classes = dict()
         self.class_line_styles = dict()
         self.class_stats = dict()
@@ -118,8 +129,10 @@ class Doc:
 
         self.parse(pages)
 
-    def parse(self, pages):
+    def parse(self, pages: ResultSet):
+
         pages = pages
+        pawls_pages = []
         group_buf = []
         class_name = "none"
         group_is_list = False
@@ -144,21 +157,42 @@ class Doc:
                 self.audited_table_bbox[page_id] = list(self.filter_list_of_bbox(list_of_bbox, **table_query))
         if BLOCK_DEBUG:
             print('Audited Table Boxes: ', self.audited_table_bbox)
+
+        word_idx = 0
+        word_bbox_map = {}
+        pawls_page = {}
+
         for page_idx, page in enumerate(pages):
+
+            page_style = pages[page_idx].attrs.get("style", None) or pages[0].attrs["style"]
+            page_style_kv = style_utils.get_style_kv(page_style)
+            page_height = float(page_style_kv['height'].replace("px", ""))
+            page_width = float(page_style_kv['width'].replace("px", ""))
+
+            pawls_page = {
+                "page": {
+                    "width": page_width,
+                    "height": page_height,
+                    "index": page_idx
+                },
+                "tokens": []
+            }
+
             all_p = page.find_all("p")
             svg_children = page.find('svg') or []
             lines_tag_list, rect_tag_list = Doc.remove_duplicate_svg_tags(soup, svg_children)
 
             self.page_svg_tags.append([lines_tag_list, rect_tag_list])
             # page_style = pages[0].attrs["style"]
-            page_style = pages[page_idx].attrs.get("style", None) or pages[0].attrs["style"]
-            page_style_kv = style_utils.get_style_kv(page_style)
+
+            print(F"Page_style_kv for page {page_idx}: {page_style_kv}")
             page_width = style_utils.parse_px(page_style_kv["width"])
             self.page_width = self.page_width or page_width
             page_height = style_utils.parse_px(page_style_kv["height"])
             self.page_height = self.page_height or page_height
             header_cutoff = header_margin * page_height
             footer_cutoff = self.page_height - footer_margin * self.page_height
+
             # print("page_dims: ", page_width, page_height)
             # print("margins: ", header_margin*page_height, footer_margin*page_height)
             p_styles = []
@@ -167,6 +201,11 @@ class Doc:
             page_line_stats = {}
             prev_p_tag = None
             for line_idx, orig_p in enumerate(all_p):
+
+                # NOTE: orig_p is actually a some chunk of N words and style has absolute positional coordinates.
+
+                print(f"orig_p {line_idx}: {orig_p}")
+
                 # Reformat p if the text contains items to be replaced.
                 new_p = None
                 changed = False
@@ -193,6 +232,40 @@ class Doc:
                                 last_line_counts[text_only] = 1
                             else:
                                 last_line_counts[text_only] = last_line_counts[text_only] + 1
+
+                    p_kv = get_kv_from_attr(p.get('style'), ":")
+                    words = p.text.split()
+                    word_start_positions_str = p_kv.get("word-start-positions", '[]')[1:-1]
+                    word_start_positions = get_word_positions(word_start_positions_str)
+
+                    word_end_positions_str = p_kv.get("word-end-positions", '[]')[1:-1]
+                    word_end_positions = get_word_positions(word_end_positions_str)
+
+                    assert len(word_start_positions) == len(word_end_positions)
+                    assert len(words) == len(word_start_positions)
+
+                    print(f"Process run of {len(words)}")
+                    for index, w in enumerate(words):
+                        x0, y0 = word_start_positions[index]
+                        x1, y1 = word_end_positions[index]
+                        pawls_page['tokens'].append({
+                            "x": x0,
+                            "y": y0,
+                            "width": y1 - y0,
+                            "height": x1 - x0,
+                            "text": w,
+                        })
+                        word_bbox_map[word_idx] = (x0, y0, x1, y1)
+                        word_idx += 1
+
+                    print(f"XOXO - Call parse_tika_style...")
+                    print(type(p))
+                    print(f'\t'+p["style"])
+                    print(f"\t{p.text}")
+                    print(f"\t{page_width}")
+
+                    # TODO - add maps to map token ids and paragraph ids to bbox
+
                     box_style, line_style, word_line_styles = style_utils.parse_tika_style(
                         p["style"], p.text, page_width
                     )
@@ -276,6 +349,10 @@ class Doc:
                 most_freq_space = max(most_freq_spaces.items(), key=operator.itemgetter(1))[0]
             page_stats = {'lines': max_lines, 'most_frequent_space': most_freq_space}
             self.page_styles.append((page_style_kv, page_width, page_height, page_stats))
+
+        self.pawls_pages.append(pawls_page)
+
+
         if PERFORMANCE_DEBUG:
             new_wall_time = default_timer()
             print(f"Checkpoint 1 Finished. Wall time: {((new_wall_time - self.wall_time) * 1000):.2f}ms")
@@ -333,6 +410,7 @@ class Doc:
             new_wall_time = default_timer()
             print(f"Checkpoint 2 Finished. Wall time: {((new_wall_time - self.wall_time) * 1000):.2f}ms")
             self.wall_time = new_wall_time
+
         for page_idx, page in enumerate(pages):
             if not page_p_styles or not page_p_styles[page_idx]:
                 continue
