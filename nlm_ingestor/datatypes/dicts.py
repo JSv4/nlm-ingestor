@@ -81,3 +81,35 @@ class OpenContractsAnnotationPythonType(TypedDict):
     rawText: str
     page: int
     annotation_json: dict[Union[int, str], OpenContractsSinglePageAnnotationType]
+
+
+class OpenContractsDocAnnotations(TypedDict):
+    # Can have multiple doc labels. Want array of doc label ids, which will be
+    # mapped to proper objects after import.
+    doc_labels: list[str]
+
+    # The annotations are stored in a list of JSONS matching OpenContractsAnnotationPythonType
+    labelled_text: list[OpenContractsAnnotationPythonType]
+
+
+class OpenContractDocExport(OpenContractsDocAnnotations):
+    """
+    Eech individual documents annotations are exported and imported into
+    and out of jsons with this form. Inherits doc_labels and labelled_text
+    from OpenContractsDocAnnotations
+    """
+
+    # Document title
+    title: str
+
+    # Document text
+    content: str
+
+    # Document description
+    description: Optional[str]
+
+    # Documents PAWLS parse file contents (serialized)
+    pawls_file_content: list[PawlsPagePythonType]
+
+    # We need to have a page count for certain analyses
+    page_count: int

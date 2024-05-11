@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from functools import reduce
 from pprint import pprint
 
 import numpy as np
@@ -16,6 +17,7 @@ from nlm_ingestor.ingestor.visual_ingestor.new_indent_parser import NewIndentPar
 from nlm_ingestor.ingestor_utils.utils import NpEncoder, \
     detect_block_center_aligned, detect_block_center_of_page
 from nlm_ingestor.ingestor_utils import utils
+from ..datatypes.dicts import OpenContractDocExport
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -239,16 +241,40 @@ def parse_blocks(
     if parse_pages:
         start_page_no, end_page_no = parse_pages
         pages = pages[start_page_no:end_page_no + 1]
+
+    # This is our visual parser which will parse out visual blocks for us and
+    # convert parser data to PAWLs layer and OpenContracts annotations
     parsed_doc = visual_ingestor.Doc(pages, ignore_blocks, render_format)
-    print(parsed_doc.pawls_pages)
+
+    doc_str = ""
+    for b in parsed_doc.blocks:
+        doc_str += " " + b['block_text']
+
+    # TODO - now we want to package everything up into a OpenContractDocExport JSON.
+    open_contracts_data: OpenContractDocExport = {
+        "title": "Grab title from parser",
+        "description": "Let's use a SLM here",
+        "content": doc_str,
+        "pawls_file_content": parsed_doc.pawls_pages,
+        "page_count": len(parsed_doc.pages),
+        "doc_labels": [],
+        "labelled_text": parsed_doc.oc_annotations
+    }
+    print(f"OpenContracts export data:")
+    pprint(open_contracts_data)
+
+    # TODO - use a lightweight but performant SLM like Phi to generate a description
+
     if use_new_indent_parser:
         indent_parser = NewIndentParser(parsed_doc, parsed_doc.blocks)
         indent_parser.indent()
+
     title_page_fonts = top_pages_info(parsed_doc)
     parsed_doc.compress_blocks()
     blocks = parsed_doc.blocks
     sents, _ = utils.blocks_to_sents(blocks)
     block_texts, _ = utils.get_block_texts(blocks)
+
     if render_format == "json":
         result = [{"title": title, "document": parsed_doc.json_dict, "title_page_fonts": title_page_fonts}]
     elif render_format == "html":
