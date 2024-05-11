@@ -366,6 +366,7 @@ class Doc:
             new_wall_time = default_timer()
             print(f"Checkpoint 1 Finished. Wall time: {((new_wall_time - self.wall_time) * 1000):.2f}ms")
             self.wall_time = new_wall_time
+
         for line_style in self.line_style_space_stats:
             spaces = self.line_style_space_stats[line_style]
             space_counts = {}
@@ -385,6 +386,7 @@ class Doc:
                                                        "count": len(spaces),
                                                        "most_frequent_space": most_frequent_space,
                                                        "space_counts": space_counts}
+
         for line_style in self.line_style_word_space_stats:
             line_style_vl_word_spaces = self.line_style_word_space_stats[line_style]
 
@@ -394,6 +396,7 @@ class Doc:
                 "count": len(line_style_vl_word_spaces),
                 "std": np.std(line_style_vl_word_spaces),
             }
+
         for line_style in self.line_style_word_stats:
             line_style_vl_word_counts = self.line_style_word_stats[line_style]
             # print(line_style_vl_word_counts)
@@ -405,6 +408,7 @@ class Doc:
                 "is_justified": line_style_vl_word_stats_median < 2,
                 "count": np.sum(line_style_vl_word_counts),
             }
+
         self.visual_line_word_stats = {
             "avg": np.mean(vl_word_counts),
             "median": np.median(vl_word_counts),
@@ -638,10 +642,6 @@ class Doc:
         self.blocks = blocks
 
         for annot_id, b in enumerate(self.blocks):
-            print(b)
-            print(f"PAWLS page length is {len(self.pawls_pages)}")
-            print(f"Other page length: {len(self.pages)}")
-            print(f"Page index: {b['page_idx']}")
             search_tokens = self.pawls_pages[b['page_idx']]['tokens']
             bbox = b['box_style']
             block = (bbox.left, bbox.top, bbox.right, bbox.top + bbox.height)
@@ -661,8 +661,6 @@ class Doc:
                     'rawText': b['block_text']
                 }
             }
-            print("Annotation:")
-            pprint.pprint(annotation_json)
             annotation: OpenContractsAnnotationPythonType = {
                 "id": annot_id,
                 "annotationLabel": b["block_type"],
@@ -670,7 +668,6 @@ class Doc:
                 "page": b['page_idx'],
                 "annotation_json": annotation_json
             }
-            pprint.pprint(annotation)
             self.oc_annotations.append(annotation)
 
         pprint.pprint(blocks[-1])
