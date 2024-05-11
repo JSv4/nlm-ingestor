@@ -1,11 +1,10 @@
-# parse style
-
 import copy
 import re
 import string
 from collections import OrderedDict, namedtuple
 import operator
 import sys
+
 import numpy as np
 import pprint
 from itertools import groupby
@@ -13,9 +12,10 @@ from bs4 import BeautifulSoup
 from bs4.element import ResultSet
 from timeit import default_timer
 
-from nlm_ingestor.datatypes.dicts import PawlsPagePythonType
+from nlm_ingestor.datatypes.dicts import PawlsPagePythonType, OpenContractsSinglePageAnnotationType, \
+    OpenContractsAnnotationPythonType
 from nlm_ingestor.ingestor import line_parser
-from nlm_ingestor.ingestor.parsers import get_word_positions, get_kv_from_attr
+from nlm_ingestor.ingestor.parsers import get_word_positions, get_kv_from_attr, find_tokens_in_block
 from nlm_ingestor.ingestor_utils.utils import sent_tokenize
 from nlm_ingestor.ingestor_utils.ing_named_tuples import BoxStyle, LineStyle, LocationKey
 from nlm_ingestor.ingestor.visual_ingestor import style_utils, table_parser, indent_parser, block_renderer, order_fixer
@@ -96,6 +96,7 @@ class Doc:
 
         self.pages = pages
         self.pawls_pages: list[PawlsPagePythonType] = []
+        self.oc_annotations: list[OpenContractsAnnotationPythonType] = []
         self.line_style_classes = dict()
         self.class_line_styles = dict()
         self.class_stats = dict()
@@ -132,7 +133,6 @@ class Doc:
     def parse(self, pages: ResultSet):
 
         pages = pages
-        pawls_pages = []
         group_buf = []
         class_name = "none"
         group_is_list = False
@@ -148,6 +148,7 @@ class Doc:
         page_blocks = []
         vl_word_counts = []
         soup = BeautifulSoup()
+
         if self.audited_bbox:
             # Group by page_idx for later usage.
             table_query = {'block_type': 'table'}
@@ -155,12 +156,15 @@ class Doc:
                 list_of_bbox = list(bboxes)
                 self.audited_bbox[page_id] = list_of_bbox
                 self.audited_table_bbox[page_id] = list(self.filter_list_of_bbox(list_of_bbox, **table_query))
+
         if BLOCK_DEBUG:
             print('Audited Table Boxes: ', self.audited_table_bbox)
 
+        # Tracking variables for PAWLs tokens + OpenContracts structural annotations
         word_idx = 0
         word_bbox_map = {}
-        pawls_page = {}
+        token_id_to_page_map = {}
+        page_id_to_token_map = {}
 
         for page_idx, page in enumerate(pages):
 
@@ -235,6 +239,8 @@ class Doc:
 
                     p_kv = get_kv_from_attr(p.get('style'), ":")
                     words = p.text.split()
+                    print(f"Pkv: {p_kv}")
+                    height = float(p_kv.get('height', 0))
                     word_start_positions_str = p_kv.get("word-start-positions", '[]')[1:-1]
                     word_start_positions = get_word_positions(word_start_positions_str)
 
@@ -247,15 +253,19 @@ class Doc:
                     print(f"Process run of {len(words)}")
                     for index, w in enumerate(words):
                         x0, y0 = word_start_positions[index]
+                        print(f"word start {x0}, {y0}")
                         x1, y1 = word_end_positions[index]
+                        print(f"word end {x1}, {y1}")
                         pawls_page['tokens'].append({
                             "x": x0,
                             "y": y0,
-                            "width": y1 - y0,
-                            "height": x1 - x0,
+                            "width": x1 - x0,
+                            "height": height,
                             "text": w,
                         })
                         word_bbox_map[word_idx] = (x0, y0, x1, y1)
+                        token_id_to_page_map[word_idx] = page_idx
+                        page_id_to_token_map[page_idx] = word_idx
                         word_idx += 1
 
                     print(f"XOXO - Call parse_tika_style...")
@@ -350,8 +360,7 @@ class Doc:
             page_stats = {'lines': max_lines, 'most_frequent_space': most_freq_space}
             self.page_styles.append((page_style_kv, page_width, page_height, page_stats))
 
-        self.pawls_pages.append(pawls_page)
-
+            self.pawls_pages.append(pawls_page)
 
         if PERFORMANCE_DEBUG:
             new_wall_time = default_timer()
@@ -523,6 +532,9 @@ class Doc:
                 line_idx = line_idx + 1
             page_blocks, group_buf, block_idx, group_is_list, vl_from_prev_page_discarded = \
                 self.visual_lines_to_blocks(page_visual_lines, group_buf, block_idx, group_is_list)
+
+            # TODO - convert blocks to tokens
+
             # a page has ended
             order_offset = 0
             if has_lines_from_previous_page:
@@ -624,6 +636,45 @@ class Doc:
             print(f"Checkpoint 3 Finished. Wall time: {((new_wall_time - self.wall_time) * 1000):.2f}ms")
             self.wall_time = new_wall_time
         self.blocks = blocks
+
+        for annot_id, b in enumerate(self.blocks):
+            print(b)
+            print(f"PAWLS page length is {len(self.pawls_pages)}")
+            print(f"Other page length: {len(self.pages)}")
+            print(f"Page index: {b['page_idx']}")
+            search_tokens = self.pawls_pages[b['page_idx']]['tokens']
+            bbox = b['box_style']
+            block = (bbox.left, bbox.top, bbox.right, bbox.top + bbox.height)
+            token_ids_in_block = find_tokens_in_block(search_tokens, block)
+            page = self.pawls_pages[b['page_idx']]['page']
+            annotation_json: dict[int, OpenContractsSinglePageAnnotationType] = {
+                int(b['page_idx']): {
+                    'bounds': {
+                        "top": 0,
+                        "bottom": page['height'],
+                        "left": 0,
+                        "right": page['width']
+                    },
+                    'tokensJsons': [
+                        {"tokenIndex": token_id, 'pageIndex': int(b['page_idx'])} for token_id in token_ids_in_block
+                    ],
+                    'rawText': b['block_text']
+                }
+            }
+            print("Annotation:")
+            pprint.pprint(annotation_json)
+            annotation: OpenContractsAnnotationPythonType = {
+                "id": annot_id,
+                "annotationLabel": b["block_type"],
+                "rawText": b["block_text"],
+                "page": b['page_idx'],
+                "annotation_json": annotation_json
+            }
+            pprint.pprint(annotation)
+            self.oc_annotations.append(annotation)
+
+        pprint.pprint(blocks[-1])
+        print(f"Blocks: {blocks[-1]}")
         self.blocks_by_page = blocks_by_page
         self.save_file_stats()
         self.organize_and_indent_blocks()
