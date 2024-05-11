@@ -1,6 +1,8 @@
 import json
 import logging
 import re
+from pprint import pprint
+
 import numpy as np
 
 from bs4 import BeautifulSoup
@@ -42,7 +44,6 @@ class PDFIngestor:
         return_dict = {
             "page_dim": page_dim,
             "num_pages": num_pages,
-            "pawls": tika_html_doc['pawls']
         }
         if render_format == "json":
             return_dict["result"] = result[0].get("document", {})
@@ -84,6 +85,7 @@ def parse_pdf(doc_location, parse_options):
     else:
         wall_time = default_timer() * 1000
         parsed_content = pdf_file_parser.parse_to_html(doc_location, do_ocr=True)
+        pprint(parsed_content)
         parse_and_apply_hocr(parsed_content)
         logger.info(
             f"PDF OCR finished in {default_timer() * 1000 - wall_time:.4f}ms on workspace",
@@ -152,6 +154,8 @@ def parse_and_apply_hocr(parsed_content):
 
     for index, page in enumerate(pages):
 
+        print(f"Page: {page}")
+
         page_kv = get_kv_from_attr(page.get('style'), ":")
         page_height = float(page_kv['height'].replace("px", ""))
         page_width = float(page_kv['width'].replace("px", ""))
@@ -166,15 +170,6 @@ def parse_and_apply_hocr(parsed_content):
             x_scale = page_width / ocr_page_width
             y_scale = page_height / ocr_page_height
             lines = page.find_all('span', class_='ocr_line')
-
-            pawls_page = {
-                "page": {
-                    "width": ocr_page_width,
-                    "height": ocr_page_height,
-                    "index": index
-                },
-                "tokens": []
-            }
 
             for line in lines:
                 title = line.get('title')
@@ -206,16 +201,6 @@ def parse_and_apply_hocr(parsed_content):
                     word_start_positions.append((word_x0, word_y0))
                     word_end_positions.append((word_x1, word_y1))
 
-                    # We want the tokens at the end so we can still annotate them and render them
-                    pawls_page['tokens'].append({
-                        "x": word_x0,
-                        "y": word_y0,
-                        "width": word_x1 - word_x0,
-                        "height": word_y1 - word_y0,
-                        "text": word.text
-                    })
-                    pawls_pages.append(pawls_page)
-
                 style += f"word-start-positions: {word_start_positions}; word-end-positions: {word_end_positions};"
                 default_font_family = "TimesNewRomanPSMT"
                 default_font = f"({default_font_family},normal,normal,{font_size},{font_size},{font_size / 4.0})"
@@ -233,7 +218,6 @@ def parse_and_apply_hocr(parsed_content):
     html_str = html_str.replace("\\n", "")
     html_str = html_str.replace("\\t", "")
     parsed_content['content'] = html_str
-    parsed_content['pawls'] = pawls_pages
 
 
 def parse_blocks(
