@@ -263,6 +263,10 @@ def parse_blocks(
     print(f"OpenContracts export data:")
     pprint(open_contracts_data)
 
+    # TODO - remove later
+    with open(f"test_export.json", "w") as f:
+        f.write(json.dumps(open_contracts_data, indent=4))
+
     # TODO - use a lightweight but performant SLM like Phi to generate a description
 
     if use_new_indent_parser:
