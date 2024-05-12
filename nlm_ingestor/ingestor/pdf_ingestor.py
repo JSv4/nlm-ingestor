@@ -37,7 +37,7 @@ class PDFIngestor:
 
         tika_html_doc = parse_pdf(doc_location, parse_options)
 
-        blocks, _block_texts, _sents, _file_data, result, page_dim, num_pages = parse_blocks(
+        blocks, _block_texts, _sents, _file_data, result, page_dim, num_pages, open_contracts_data = parse_blocks(
             tika_html_doc,
             render_format=render_format,
             parse_pages=parse_pages,
@@ -56,6 +56,7 @@ class PDFIngestor:
         self.return_dict = return_dict
         self.file_data = _file_data
         self.blocks = blocks
+        self.open_contracts_data = open_contracts_data
 
 
 def parse_pdf(doc_location, parse_options):
@@ -223,10 +224,10 @@ def parse_and_apply_hocr(parsed_content):
 
 
 def parse_blocks(
-        tika_html_doc,
-        render_format: str = "all",
-        parse_pages: tuple = (),
-        use_new_indent_parser: bool = False,
+    tika_html_doc,
+    render_format: str = "all",
+    parse_pages: tuple = (),
+    use_new_indent_parser: bool = False,
 ):
     soup = BeautifulSoup(str(tika_html_doc), "html.parser")
     meta_tags = soup.find_all("meta")
@@ -292,7 +293,7 @@ def parse_blocks(
     file_data = [json.dumps(res, cls=NpEncoder) for res in result]
 
     return blocks, block_texts, sents, file_data, \
-        result, [parsed_doc.page_width, parsed_doc.page_height], len(pages) - 1
+        result, [parsed_doc.page_width, parsed_doc.page_height], len(pages) - 1, open_contracts_data
 
 
 def top_pages_info(parsed_doc):
