@@ -1,5 +1,7 @@
 from typing import TypedDict, Union, Optional
 
+from nlm_ingestor.datatypes.enums import LabelType
+
 
 class PawlsPageBoundaryPythonType(TypedDict):
     """
@@ -113,3 +115,56 @@ class OpenContractDocExport(OpenContractsDocAnnotations):
 
     # We need to have a page count for certain analyses
     page_count: int
+
+
+class AnnotationLabelPythonType(TypedDict):
+    id: str
+    color: str
+    description: str
+    icon: str
+    text: str
+    label_type: LabelType
+
+
+class OpenContractCorpusTemplateType(TypedDict):
+    title: str
+    description: str
+    icon_data: Optional[str]
+    icon_name: Optional[str]
+    creator: str
+
+
+class OpenContractCorpusType(OpenContractCorpusTemplateType):
+    id: int
+    label_set: str
+
+
+class OpenContractsLabelSetType(TypedDict):
+    id: int | str
+    title: str
+    description: str
+    icon_data: Optional[str]
+    icon_name: str
+    creator: str
+
+
+class OpenContractsExportDataJsonPythonType(TypedDict):
+    """
+    This is the type of the data.json that goes into our export zips and
+    carries the annotations and annotation information
+    """
+
+    # Lookup of pdf filename to the corresponding Annotation data
+    annotated_docs: dict[str, OpenContractDocExport]
+
+    # Requisite labels, mapped from label name to label data
+    doc_labels: dict[str, AnnotationLabelPythonType]
+
+    # Requisite text labels, mapped from label name to label data
+    text_labels: dict[str, AnnotationLabelPythonType]
+
+    # Stores the corpus (todo - make sure the icon gets stored as base64)
+    corpus: OpenContractCorpusType
+
+    # Stores the label set (todo - make sure the icon gets stored as base64)
+    label_set: OpenContractsLabelSetType
