@@ -26,6 +26,7 @@ def parse_document(
     render_format = request.args.get('renderFormat', 'all')
     use_new_indent_parser = request.args.get('useNewIndentParser', 'no')
     apply_ocr = request.args.get('applyOcr', 'no')
+    calculate_pawls_data = request.args.get('calculate_pawls_data', False)
     file = request.files['file']
     tmp_file = None
     try:
@@ -34,7 +35,8 @@ def parse_document(
             "render_format": render_format,
             "use_new_indent_parser": use_new_indent_parser == "yes",
             "parse_pages": (),
-            "apply_ocr": apply_ocr == "yes"
+            "apply_ocr": apply_ocr == "yes",
+            "calculate_pawls_data": calculate_pawls_data
         }
         # save the incoming file to a temporary location
         filename = secure_filename(file.filename)
@@ -73,6 +75,7 @@ def parse_document(
 def main():
     logger.info("Starting ingestor service..")
     app.run(host="0.0.0.0", port=5001, debug=False)
+
 
 if __name__ == "__main__":
     main()
