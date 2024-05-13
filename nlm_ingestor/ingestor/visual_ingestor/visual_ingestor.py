@@ -646,14 +646,13 @@ class Doc:
             bbox = b['box_style']
             block = (bbox.left, bbox.top, bbox.right, bbox.top + bbox.height)
             token_ids_in_block = find_tokens_in_block(search_tokens, block)
-            page = self.pawls_pages[b['page_idx']]['page']
             annotation_json: dict[int, OpenContractsSinglePageAnnotationType] = {
                 int(b['page_idx']): {
                     'bounds': {
-                        "top": 0,
-                        "bottom": page['height'],
-                        "left": 0,
-                        "right": page['width']
+                        "top": bbox.top,
+                        "bottom": bbox.top + height,
+                        "left": bbox.left,
+                        "right": bbox.right
                     },
                     'tokensJsons': [
                         {"tokenIndex": token_id, 'pageIndex': int(b['page_idx'])} for token_id in token_ids_in_block
