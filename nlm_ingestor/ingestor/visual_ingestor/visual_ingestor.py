@@ -187,7 +187,6 @@ class Doc:
             lines_tag_list, rect_tag_list = Doc.remove_duplicate_svg_tags(soup, svg_children)
 
             self.page_svg_tags.append([lines_tag_list, rect_tag_list])
-            # page_style = pages[0].attrs["style"]
 
             print(F"Page_style_kv for page {page_idx}: {page_style_kv}")
             page_width = style_utils.parse_px(page_style_kv["width"])
@@ -197,8 +196,6 @@ class Doc:
             header_cutoff = header_margin * page_height
             footer_cutoff = self.page_height - footer_margin * self.page_height
 
-            # print("page_dims: ", page_width, page_height)
-            # print("margins: ", header_margin*page_height, footer_margin*page_height)
             p_styles = []
             prev_box_style = None
             prev_line_style = None
@@ -241,11 +238,13 @@ class Doc:
                     words = p.text.split()
                     print(f"Pkv: {p_kv}")
                     height = float(p_kv.get('height', 0))
+                    font_size = float(p_kv.get('font-size', '0px').replace("px", ""))
                     word_start_positions_str = p_kv.get("word-start-positions", '[]')[1:-1]
                     word_start_positions = get_word_positions(word_start_positions_str)
-
+                    print(f"word_start_positions:\n\t{word_start_positions}")
                     word_end_positions_str = p_kv.get("word-end-positions", '[]')[1:-1]
                     word_end_positions = get_word_positions(word_end_positions_str)
+                    print(f"word_end_positions:\n\t{word_end_positions}")
 
                     assert len(word_start_positions) == len(word_end_positions)
                     assert len(words) == len(word_start_positions)
@@ -260,7 +259,7 @@ class Doc:
                             "x": x0,
                             "y": y0,
                             "width": x1 - x0,
-                            "height": height,
+                            "height": font_size,
                             "text": w,
                         })
                         word_bbox_map[word_idx] = (x0, y0, x1, y1)
@@ -650,7 +649,7 @@ class Doc:
                 int(b['page_idx']): {
                     'bounds': {
                         "top": bbox.top,
-                        "bottom": bbox.top + height,
+                        "bottom": bbox.top + bbox.height,
                         "left": bbox.left,
                         "right": bbox.right
                     },
