@@ -13,10 +13,10 @@ def find_tokens_in_block(tokens, block):
 
     for tok_index, token in enumerate(tokens):
         if (
-                token["x"] >= x0 * fuzz_factor and
-                token["y"] >= y0 * fuzz_factor and
-                token["x"] + token["height"] <= x1 * fuzz_factor and
-                token["y"] + token["width"] <= y1 * fuzz_factor
+                token["x"] >= x0 * (1-fuzz_factor) and
+                token["y"] >= y0 * (1-fuzz_factor) and
+                token["x"] + token["width"] <= x1 * fuzz_factor and
+                token["y"] + token["height"] <= y1 * fuzz_factor
         ):
             contained_tokens.append(tok_index)
 
