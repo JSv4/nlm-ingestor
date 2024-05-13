@@ -34,6 +34,7 @@ class PDFIngestor:
             if parse_options else "all"
         use_new_indent_parser = parse_options.get("use_new_indent_parser", False) \
             if parse_options else False
+        calculate_pawls_data = parse_options.get("calculate_pawls_data", False)
 
         tika_html_doc = parse_pdf(doc_location, parse_options)
 
@@ -41,7 +42,8 @@ class PDFIngestor:
             tika_html_doc,
             render_format=render_format,
             parse_pages=parse_pages,
-            use_new_indent_parser=use_new_indent_parser
+            use_new_indent_parser=use_new_indent_parser,
+            calculate_pawls_data=calculate_pawls_data
         )
         return_dict = {
             "page_dim": page_dim,
@@ -228,6 +230,7 @@ def parse_blocks(
     render_format: str = "all",
     parse_pages: tuple = (),
     use_new_indent_parser: bool = False,
+    calculate_pawls_data: bool = False,
 ):
     soup = BeautifulSoup(str(tika_html_doc), "html.parser")
     meta_tags = soup.find_all("meta")
@@ -245,7 +248,12 @@ def parse_blocks(
 
     # This is our visual parser which will parse out visual blocks for us and
     # convert parser data to PAWLs layer and OpenContracts annotations
-    parsed_doc = visual_ingestor.Doc(pages, ignore_blocks, render_format)
+    parsed_doc = visual_ingestor.Doc(
+        pages,
+        ignore_blocks,
+        render_format,
+        calculate_pawls_data=calculate_pawls_data
+    )
 
     doc_str = ""
     for b in parsed_doc.blocks:
