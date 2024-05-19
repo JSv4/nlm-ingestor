@@ -60,7 +60,7 @@ os.environ["TIKA_SERVER_ENDPOINT"] = "http://localhost:9998"
 
 
 # This would be called by ingestor_api.py if mime_type == "application/pdf"
-ingestor = pdf_ingestor.PDFIngestor(doc_loc, {"apply_ocr": True, "calculate_pawls_data": True})
+ingestor = pdf_ingestor.PDFIngestor(doc_loc, {"apply_ocr": True, "calculate_opencontracts_data": True})
 open_contracts_data = ingestor.open_contracts_data
 print(open_contracts_data)
 
