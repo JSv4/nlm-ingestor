@@ -3,6 +3,7 @@ import logging
 import re
 from functools import reduce
 from pprint import pprint
+from typing import Optional
 
 import numpy as np
 
@@ -34,7 +35,7 @@ class PDFIngestor:
             if parse_options else "all"
         use_new_indent_parser = parse_options.get("use_new_indent_parser", False) \
             if parse_options else False
-        calculate_pawls_data = parse_options.get("calculate_pawls_data", False)
+        calculate_opencontracts_data = parse_options.get("calculate_opencontracts_data", False)
 
         tika_html_doc = parse_pdf(doc_location, parse_options)
 
@@ -43,7 +44,7 @@ class PDFIngestor:
             render_format=render_format,
             parse_pages=parse_pages,
             use_new_indent_parser=use_new_indent_parser,
-            calculate_pawls_data=calculate_pawls_data
+            calculate_opencontracts_data=calculate_opencontracts_data
         )
         return_dict = {
             "page_dim": page_dim,
@@ -55,10 +56,14 @@ class PDFIngestor:
         elif render_format == "all":
             return_dict["result"] = result[1].get("document", {})
             self.doc_result_json = result[1]
+
+        if open_contracts_data is not None:
+            return_dict['opencontracts_data'] = open_contracts_data
+
         self.return_dict = return_dict
         self.file_data = _file_data
         self.blocks = blocks
-        self.open_contracts_data = open_contracts_data
+        self.open_contracts_data: Optional[OpenContractDocExport] = open_contracts_data
 
 
 def parse_pdf(doc_location, parse_options):
@@ -230,7 +235,7 @@ def parse_blocks(
     render_format: str = "all",
     parse_pages: tuple = (),
     use_new_indent_parser: bool = False,
-    calculate_pawls_data: bool = False,
+    calculate_opencontracts_data: bool = False,
 ):
     soup = BeautifulSoup(str(tika_html_doc), "html.parser")
     meta_tags = soup.find_all("meta")
@@ -252,7 +257,7 @@ def parse_blocks(
         pages,
         ignore_blocks,
         render_format,
-        calculate_pawls_data=calculate_pawls_data
+        calculate_opencontracts_data=calculate_opencontracts_data
     )
 
     doc_str = ""
@@ -260,23 +265,18 @@ def parse_blocks(
         doc_str += " " + b['block_text']
 
     # TODO - now we want to package everything up into a OpenContractDocExport JSON.
-    open_contracts_data: OpenContractDocExport = {
-        "title": "Grab title from parser",
-        "description": "Let's use a SLM here",
-        "content": doc_str,
-        "pawls_file_content": parsed_doc.pawls_pages,
-        "page_count": len(parsed_doc.pages),
-        "doc_labels": [],
-        "labelled_text": parsed_doc.oc_annotations
-    }
-    print(f"OpenContracts export data:")
-    pprint(open_contracts_data)
-
-    # TODO - remove later
-    with open(f"test_export.json", "w") as f:
-        f.write(json.dumps(open_contracts_data, indent=4))
-
-    # TODO - use a lightweight but performant SLM like Phi to generate a description
+    open_contracts_data: Optional[OpenContractDocExport] = None
+    if calculate_opencontracts_data:
+        # TODO - use a lightweight but performant SLM like Phi to generate a description
+        open_contracts_data: Optional[OpenContractDocExport] = {
+            "title": "Grab title from parser",
+            "description": "-",
+            "content": doc_str,
+            "pawls_file_content": parsed_doc.pawls_pages,
+            "page_count": len(parsed_doc.pages),
+            "doc_labels": [],
+            "labelled_text": parsed_doc.oc_annotations
+        }
 
     if use_new_indent_parser:
         indent_parser = NewIndentParser(parsed_doc, parsed_doc.blocks)

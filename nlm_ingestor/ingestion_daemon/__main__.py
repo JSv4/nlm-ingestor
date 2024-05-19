@@ -14,19 +14,30 @@ app = Flask(__name__)
 logger = logging.getLogger(__name__)
 logger.setLevel(cfg.log_level())
 
+API_KEY = os.environ.get('API_KEY', None)
+print(f"Ingestor API_KEY set to {API_KEY}")
+
+
 @app.route('/', methods=['GET'])
 def health_check():
     return 'Service is running', 200
 
+
 @app.route('/api/parseDocument', methods=['POST'])
 def parse_document(
-    file=None,
-    render_format: str = "all",
+        file=None,
+        render_format: str = "all",
 ):
+    # Verify API_KEY header
+    api_key = request.headers.get('API_KEY')
+    print(f"Request API_KEY: {api_key}")
+    if isinstance(API_KEY, str) and api_key != API_KEY:
+        return make_response(jsonify({"status": "fail", "reason": "Unauthorized"}), 401)
+
     render_format = request.args.get('renderFormat', 'all')
     use_new_indent_parser = request.args.get('useNewIndentParser', 'no')
     apply_ocr = request.args.get('applyOcr', 'no')
-    calculate_pawls_data = request.args.get('calculate_pawls_data', False)
+    calculate_opencontracts_data = request.args.get('calculate_opencontracts_data', "no")
     file = request.files['file']
     tmp_file = None
     try:
@@ -36,7 +47,7 @@ def parse_document(
             "use_new_indent_parser": use_new_indent_parser == "yes",
             "parse_pages": (),
             "apply_ocr": apply_ocr == "yes",
-            "calculate_pawls_data": calculate_pawls_data
+            "calculate_opencontracts_data": calculate_opencontracts_data == "yes"
         }
         # save the incoming file to a temporary location
         filename = secure_filename(file.filename)
@@ -72,6 +83,7 @@ def parse_document(
             os.unlink(tmp_file)
     return make_response(jsonify({"status": status, "reason": msg}), rc)
 
+
 def main():
     logger.info("Starting ingestor service..")
     app.run(host="0.0.0.0", port=5001, debug=False)
@@ -79,5 +91,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

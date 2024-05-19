@@ -91,12 +91,12 @@ class Doc:
             ignore_blocks: list,
             render_format: str = "all",
             audited_bbox=None,
-            calculate_pawls_data: bool = False
+            calculate_opencontracts_data: bool = False
     ):
         print(f"Audited_bbox type {type(audited_bbox)}")
 
         self.pages = pages
-        self.calculate_pawls_data = calculate_pawls_data
+        self.calculate_opencontracts_data = calculate_opencontracts_data
         self.pawls_pages: list[PawlsPagePythonType] = []
         self.oc_annotations: list[OpenContractsAnnotationPythonType] = []
         self.line_style_classes = dict()
@@ -251,7 +251,7 @@ class Doc:
                     assert len(word_start_positions) == len(word_end_positions)
                     assert len(words) == len(word_start_positions)
 
-                    if self.calculate_pawls_data:
+                    if self.calculate_opencontracts_data:
                         print(f"Process run of {len(words)}")
                         for index, w in enumerate(words):
                             x0, y0 = word_start_positions[index]
@@ -634,8 +634,8 @@ class Doc:
             self.wall_time = new_wall_time
         self.blocks = blocks
 
-        # Only perform this calculation if self.calculate_pawls_data is set to True
-        if self.calculate_pawls_data:
+        # Only perform this calculation if self.calculate_opencontracts_data is set to True
+        if self.calculate_opencontracts_data:
             for annot_id, b in enumerate(self.blocks):
                 search_tokens = self.pawls_pages[b['page_idx']]['tokens']
                 bbox = b['box_style']
@@ -657,7 +657,7 @@ class Doc:
                 }
                 annotation: OpenContractsAnnotationPythonType = {
                     "id": annot_id,
-                    "annotationLabel": b["block_type"],
+                    "annotationLabel": b["block_type"]+(b.get('block_level', '')),
                     "rawText": b["block_text"],
                     "page": b['page_idx'],
                     "annotation_json": annotation_json
