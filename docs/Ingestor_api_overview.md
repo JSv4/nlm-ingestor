@@ -1,5 +1,3 @@
-Here's the detailed documentation and function call diagrams for the provided Python file:
-
 ## Module: `nlm_ingestor`
 
 ### Functions:
@@ -53,5 +51,3 @@ The `ingest_document` function is the main entry point for document ingestion. I
 - For other MIME types, it uses `pdf_file_parser.parse_to_html` to convert the document to HTML and then uses `html_ingestor.HTMLIngestor` to parse it.
 
 The function returns the parsed result dictionary (`return_dict`) and the ingestor object used for parsing.
-
-Note: The specific implementations of the ingestor modules (`PDFIngestor`, `MarkdownDocument`, `HTMLIngestor`, `TextIngestor`, `XMLIngestor`) are not provided in the given code snippet, so their internal workings cannot be documented based on the available information.
