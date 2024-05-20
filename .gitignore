@@ -141,3 +141,7 @@ dmypy.json
 
 # DS_Store
 .DS_Store
+
+# Local testing files
+*.json
+*.pdf

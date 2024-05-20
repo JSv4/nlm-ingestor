@@ -1,23 +1,29 @@
 import json
 import logging
 import re
-import numpy as np
-from collections import defaultdict, namedtuple
+from functools import reduce
+from pprint import pprint
 from typing import Optional
+
+import numpy as np
 
 from bs4 import BeautifulSoup
 
 from nlm_ingestor.file_parser import pdf_file_parser
 from timeit import default_timer
+
+from .parsers import get_kv_from_attr, get_word_positions
 from .visual_ingestor import visual_ingestor
 from nlm_ingestor.ingestor.visual_ingestor.new_indent_parser import NewIndentParser
 from nlm_ingestor.ingestor_utils.utils import NpEncoder, \
     detect_block_center_aligned, detect_block_center_of_page
 from nlm_ingestor.ingestor_utils import utils
+from ..datatypes.dicts import OpenContractDocExport
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 text_only_pattern = re.compile(r"[^a-zA-Z]+")
+
 
 class PDFIngestor:
     def __init__(self, doc_location, parse_options):
@@ -29,14 +35,16 @@ class PDFIngestor:
             if parse_options else "all"
         use_new_indent_parser = parse_options.get("use_new_indent_parser", False) \
             if parse_options else False
-        
+        calculate_opencontracts_data = parse_options.get("calculate_opencontracts_data", False)
+
         tika_html_doc = parse_pdf(doc_location, parse_options)
-        # print("tika_html_doc", tika_html_doc)
-        blocks, _block_texts, _sents, _file_data, result, page_dim, num_pages = parse_blocks(
+
+        blocks, _block_texts, _sents, _file_data, result, page_dim, num_pages, open_contracts_data = parse_blocks(
             tika_html_doc,
             render_format=render_format,
             parse_pages=parse_pages,
-            use_new_indent_parser=use_new_indent_parser
+            use_new_indent_parser=use_new_indent_parser,
+            calculate_opencontracts_data=calculate_opencontracts_data
         )
         return_dict = {
             "page_dim": page_dim,
@@ -48,17 +56,25 @@ class PDFIngestor:
         elif render_format == "all":
             return_dict["result"] = result[1].get("document", {})
             self.doc_result_json = result[1]
+
+        if open_contracts_data is not None:
+            return_dict['opencontracts_data'] = open_contracts_data
+
         self.return_dict = return_dict
         self.file_data = _file_data
         self.blocks = blocks
+        self.open_contracts_data: Optional[OpenContractDocExport] = open_contracts_data
 
 
 def parse_pdf(doc_location, parse_options):
     apply_ocr = parse_options.get("apply_ocr", False) if parse_options else False
     if not apply_ocr:
         wall_time = default_timer() * 1000
-        logger.info("Parsing PDF")
         parsed_content = pdf_file_parser.parse_to_html(doc_location)
+
+        # Testing parsing pawls from non-OCR
+        parse(parsed_content)
+
         logger.info(
             f"PDF Parsing finished in {default_timer() * 1000 - wall_time:.4f}ms on workspace",
         )
@@ -79,35 +95,84 @@ def parse_pdf(doc_location, parse_options):
     else:
         wall_time = default_timer() * 1000
         parsed_content = pdf_file_parser.parse_to_html(doc_location, do_ocr=True)
+        pprint(parsed_content)
         parse_and_apply_hocr(parsed_content)
         logger.info(
             f"PDF OCR finished in {default_timer() * 1000 - wall_time:.4f}ms on workspace",
         )
     return parsed_content
-        
+
+
+def parse(parsed_content):
+    soup = BeautifulSoup(str(parsed_content), "html.parser")
+    pages = soup.find_all("div", class_=lambda x: x not in ['annotation'])
+
+    pawls_pages = []
+
+    for index, page in enumerate(pages):
+
+        page_kv = get_kv_from_attr(page.get('style'), ":")
+        page_height = float(page_kv['height'].replace("px", ""))
+        page_width = float(page_kv['width'].replace("px", ""))
+
+        pawls_page = {
+            "page": {
+                "width": page_width,
+                "height": page_height,
+                "index": index
+            },
+            "tokens": []
+        }
+
+        ps = page.find_all("p")
+        for p in ps:
+            p_kv = get_kv_from_attr(p.get('style'), ":")
+            words = p.text.split()
+            word_start_positions_str = p_kv.get("word-start-positions", '[]')[1:-1]
+            word_start_positions = get_word_positions(word_start_positions_str)
+
+            word_end_positions_str = p_kv.get("word-end-positions", '[]')[1:-1]
+            word_end_positions = get_word_positions(word_end_positions_str)
+
+            assert len(word_start_positions) == len(word_end_positions)
+            assert len(words) == len(word_start_positions)
+
+            for index, w in enumerate(words):
+                x0, y0 = word_start_positions[index]
+                x1, y1 = word_end_positions[index]
+                pawls_page['tokens'].append({
+                    "x": x0,
+                    "y": y0,
+                    "width": y1 - y0,
+                    "height": x1 - x0,
+                    "text": w,
+                })
+
+        pawls_pages.append(pawls_page)
+
+    html_str = str(soup.html)
+
+    parsed_content['content'] = html_str
+    parsed_content['pawls'] = pawls_pages
+
 
 def parse_and_apply_hocr(parsed_content):
-    def get_kv_from_attr(attr_str, sep=" "):
-        #     print(attr_str)
-        kv_string = attr_str.split(";")
-        kvs = {}
-        for kv in kv_string:
-            parts = kv.strip().split(sep)
-            k = parts[0]
-            v = parts[1:]
-            if len(v) == 1:
-                v = v[0].strip()
-            kvs[k] = v
-        return kvs
 
     soup = BeautifulSoup(str(parsed_content), "html.parser")
     pages = soup.find_all("div", class_='page')
-    for page in pages:
+    pawls_pages = []
+
+    for index, page in enumerate(pages):
+
+        print(f"Page: {page}")
+
         page_kv = get_kv_from_attr(page.get('style'), ":")
         page_height = float(page_kv['height'].replace("px", ""))
         page_width = float(page_kv['width'].replace("px", ""))
         ocr_pages = page.find_all('div', class_='ocr_page')
+
         if len(ocr_pages) > 0:
+
             ocr_page = ocr_pages[0]
             ocr_page_kv = get_kv_from_attr(ocr_page.get('title'))
             ocr_page_width = float(ocr_page_kv['bbox'][2])
@@ -115,23 +180,28 @@ def parse_and_apply_hocr(parsed_content):
             x_scale = page_width / ocr_page_width
             y_scale = page_height / ocr_page_height
             lines = page.find_all('span', class_='ocr_line')
+
             for line in lines:
                 title = line.get('title')
                 p_tag = soup.new_tag("p")
                 line_kv = get_kv_from_attr(title)
+
                 x0 = float(line_kv['bbox'][0]) * x_scale
                 y0 = float(line_kv['bbox'][1]) * y_scale
                 x1 = float(line_kv['bbox'][0]) * x_scale
                 y1 = float(line_kv['bbox'][1]) * y_scale
                 height = y1 - y0
+
                 font_size = float(line_kv['x_size']) * y_scale
-                font_size = 12
+                font_size = 12  # TODO - why is this hard-coded and overriding previous val?
+
                 p_tag.string = line.text.strip().replace("\\n*", "")
                 style = f"position: absolute; top:{y0}px; text-indent:{x0}px;"
                 style += f"height: {height};font-size:{font_size}px;"
                 words = line.find_all('span', class_='ocrx_word')
                 word_start_positions = []
                 word_end_positions = []
+
                 for word in words:
                     word_kv = get_kv_from_attr(word.get('title'))
                     word_x0 = float(word_kv['bbox'][0]) * x_scale
@@ -140,6 +210,7 @@ def parse_and_apply_hocr(parsed_content):
                     word_y1 = float(word_kv['bbox'][1]) * y_scale
                     word_start_positions.append((word_x0, word_y0))
                     word_end_positions.append((word_x1, word_y1))
+
                 style += f"word-start-positions: {word_start_positions}; word-end-positions: {word_end_positions};"
                 default_font_family = "TimesNewRomanPSMT"
                 default_font = f"({default_font_family},normal,normal,{font_size},{font_size},{font_size / 4.0})"
@@ -147,18 +218,24 @@ def parse_and_apply_hocr(parsed_content):
                 style += f"font-family: {default_font_family};font-style: normal;font-weight: normal;word-fonts: [{word_fonts}]"
                 p_tag.attrs["style"] = style
                 page.append(p_tag)
+
             for ocr_block in page.find_all('div', class_='ocr'):
                 ocr_block.decompose()
+        else:
+            print("Length of OCR pages is 0")
+
     html_str = str(soup.html)
     html_str = html_str.replace("\\n", "")
     html_str = html_str.replace("\\t", "")
     parsed_content['content'] = html_str
 
+
 def parse_blocks(
-        tika_html_doc,
-        render_format: str = "all",
-        parse_pages: tuple = (),
-        use_new_indent_parser: bool = False,
+    tika_html_doc,
+    render_format: str = "all",
+    parse_pages: tuple = (),
+    use_new_indent_parser: bool = False,
+    calculate_opencontracts_data: bool = False,
 ):
     soup = BeautifulSoup(str(tika_html_doc), "html.parser")
     meta_tags = soup.find_all("meta")
@@ -173,15 +250,44 @@ def parse_blocks(
     if parse_pages:
         start_page_no, end_page_no = parse_pages
         pages = pages[start_page_no:end_page_no + 1]
-    parsed_doc = visual_ingestor.Doc(pages, ignore_blocks, render_format)
+
+    # This is our visual parser which will parse out visual blocks for us and
+    # convert parser data to PAWLs layer and OpenContracts annotations
+    parsed_doc = visual_ingestor.Doc(
+        pages,
+        ignore_blocks,
+        render_format,
+        calculate_opencontracts_data=calculate_opencontracts_data
+    )
+
+    doc_str = ""
+    for b in parsed_doc.blocks:
+        doc_str += " " + b['block_text']
+
+    # TODO - now we want to package everything up into a OpenContractDocExport JSON.
+    open_contracts_data: Optional[OpenContractDocExport] = None
+    if calculate_opencontracts_data:
+        # TODO - use a lightweight but performant SLM like Phi to generate a description
+        open_contracts_data: Optional[OpenContractDocExport] = {
+            "title": "Grab title from parser",
+            "description": "-",
+            "content": doc_str,
+            "pawls_file_content": parsed_doc.pawls_pages,
+            "page_count": len(parsed_doc.pages),
+            "doc_labels": [],
+            "labelled_text": parsed_doc.oc_annotations
+        }
+
     if use_new_indent_parser:
         indent_parser = NewIndentParser(parsed_doc, parsed_doc.blocks)
         indent_parser.indent()
+
     title_page_fonts = top_pages_info(parsed_doc)
     parsed_doc.compress_blocks()
     blocks = parsed_doc.blocks
     sents, _ = utils.blocks_to_sents(blocks)
     block_texts, _ = utils.get_block_texts(blocks)
+
     if render_format == "json":
         result = [{"title": title, "document": parsed_doc.json_dict, "title_page_fonts": title_page_fonts}]
     elif render_format == "html":
@@ -195,24 +301,25 @@ def parse_blocks(
     file_data = [json.dumps(res, cls=NpEncoder) for res in result]
 
     return blocks, block_texts, sents, file_data, \
-            result, [parsed_doc.page_width, parsed_doc.page_height], len(pages) - 1
+        result, [parsed_doc.page_width, parsed_doc.page_height], len(pages) - 1, open_contracts_data
+
 
 def top_pages_info(parsed_doc):
     font_freq = {}
     for idx, block in enumerate(parsed_doc.blocks):
-        if block["page_idx"] > 2:       # Consider only the first 2 pages
+        if block["page_idx"] > 2:  # Consider only the first 2 pages
             break
         if not block["block_type"] == "header" and not block["block_idx"] < 1:
             continue
         for line in block["visual_lines"]:
-            line_font = line["line_style"][2]       # font_size
+            line_font = line["line_style"][2]  # font_size
             line_text = line["text"]
             if line_font in font_freq:
                 font_freq[line_font].append({
                     "text": line_text,
                     "page": block["page_idx"],
                     "block_idx": block["block_idx"],
-                    "enum_idx": idx     # Adding enum_idx as the block_idx can be wrong here.
+                    "enum_idx": idx  # Adding enum_idx as the block_idx can be wrong here.
                 })
             else:
                 font_freq[line_font] = [
@@ -220,8 +327,8 @@ def top_pages_info(parsed_doc):
                         "text": line_text,
                         "page": block["page_idx"],
                         "block_idx": block["block_idx"],
-                        "enum_idx": idx     # Adding enum_idx as the block_idx can be wrong here.
-                     }
+                        "enum_idx": idx  # Adding enum_idx as the block_idx can be wrong here.
+                    }
                 ]
     # Sort the font_freq in descending order.
     sorted_freq = {}

@@ -26,8 +26,8 @@ class TikaFileParser(FileParser):
                 "X-Tika-OCRtimeoutSeconds": str(timeout),
             }
 
-        if ensure_bool(os.environ.get("TIKA_OCR", False)):
-            headers = None
+        # if ensure_bool(os.environ.get("TIKA_OCR", False)):
+        #     headers = None
         return parser.from_file(filepath, xmlContent=True, requestOptions={'headers': headers, 'timeout': timeout})
 
     def parse_to_clean_html(self, filepath):

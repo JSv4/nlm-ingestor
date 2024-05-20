@@ -1,30 +1,32 @@
-# parse style
-
 import copy
 import re
 import string
 from collections import OrderedDict, namedtuple
 import operator
 import sys
+
 import numpy as np
 import pprint
-from typing import List, Dict
 from itertools import groupby
 from bs4 import BeautifulSoup
+from bs4.element import ResultSet
 from timeit import default_timer
 
+from nlm_ingestor.datatypes.dicts import PawlsPagePythonType, OpenContractsSinglePageAnnotationType, \
+    OpenContractsAnnotationPythonType
+from nlm_ingestor.ingestor import line_parser
+from nlm_ingestor.ingestor.parsers import get_word_positions, get_kv_from_attr, find_tokens_in_block
 from nlm_ingestor.ingestor_utils.utils import sent_tokenize
 from nlm_ingestor.ingestor_utils.ing_named_tuples import BoxStyle, LineStyle, LocationKey
 from nlm_ingestor.ingestor.visual_ingestor import style_utils, table_parser, indent_parser, block_renderer, order_fixer
-from nlm_ingestor.ingestor import line_parser
 from nlm_ingestor.ingestor_utils.parsing_utils import *
 from nlm_ingestor.ingestor.visual_ingestor import vi_helper_utils as vhu
 
 base_font_size = 3
-header_margin = 0.18            # don't touch this!
+header_margin = 0.18  # don't touch this!
 footer_margin = 0.1
-line_height_threshold = 1.4     # used to be 1.8 - use statistics
-table_col_threshold = 2.8       # 3.35# used to be 4.0 - use statistics
+line_height_threshold = 1.4  # used to be 1.8 - use statistics
+table_col_threshold = 2.8  # 3.35# used to be 4.0 - use statistics
 table_end_space_threshold = 2.2
 JUSTIFIED_NORMAL_GAP_MULTIPLIER = 4.0
 CURRENCY_TOKENS = ['$', '€', '£']
@@ -45,9 +47,9 @@ pp = pprint.PrettyPrinter(indent=4, compact=True)
 # List of items / p_tags which when returned need to be raised a flag
 filter_out_pattern_list = [
     ".", "_", "�"  # example --->  "start string . . . . . . . . .some other string"
-    ]
+]
 PARENTHESIZED_HDR = r'^\s*\(([^\)]+)\)\s*$'
-PAGE_NUM_HEADER = r'\s*[pP]age\s*\d+\s*'            # Identify patterns like "Page 1" / "Page 1 of n"
+PAGE_NUM_HEADER = r'\s*[pP]age\s*\d+\s*'  # Identify patterns like "Page 1" / "Page 1 of n"
 
 filter_out_pattern = re.compile(r"[" + "".join(filter_out_pattern_list) + "]{2,}")  # 2 or more occurrences
 filter_ls_pattern = re.compile(r"^[" + "".join(filter_out_pattern_list) + "]{2,}")  # Left side pattern
@@ -83,8 +85,20 @@ def get_block_type(group_is_list, group_is_table_row, group_text):
 
 
 class Doc:
-    def __init__(self, pages, ignore_blocks, render_format: str = "all", audited_bbox = None):
+    def __init__(
+            self,
+            pages: ResultSet,
+            ignore_blocks: list,
+            render_format: str = "all",
+            audited_bbox=None,
+            calculate_opencontracts_data: bool = False
+    ):
+        print(f"Audited_bbox type {type(audited_bbox)}")
+
         self.pages = pages
+        self.calculate_opencontracts_data = calculate_opencontracts_data
+        self.pawls_pages: list[PawlsPagePythonType] = []
+        self.oc_annotations: list[OpenContractsAnnotationPythonType] = []
         self.line_style_classes = dict()
         self.class_line_styles = dict()
         self.class_stats = dict()
@@ -108,25 +122,25 @@ class Doc:
         self.line_style_word_stats = {}
         self.visual_line_word_stats = {}
         self.is_justified = False
-        self.page_styles = []           # Style specific to a page. Height, width, space stats etc.
+        self.page_styles = []  # Style specific to a page. Height, width, space stats etc.
         self.audited_bbox = audited_bbox
         self.audited_table_bbox = {}
         self.page_svg_tags = []
+
         if PERFORMANCE_DEBUG:
             self.wall_time = default_timer()
+
         self.parse(pages)
 
-    def parse(self, pages):
+    def parse(self, pages: ResultSet):
+
         pages = pages
         group_buf = []
-        grouped_body_str = "<body>"
         class_name = "none"
         group_is_list = False
         group_is_table_row = False
         blocks = []
         block_idx = 0
-        class_blocks = []
-        group_reason = ""
         page_headers = dict()
         page_footers = dict()
         last_line_counts = {}
@@ -136,38 +150,65 @@ class Doc:
         page_blocks = []
         vl_word_counts = []
         soup = BeautifulSoup()
+
         if self.audited_bbox:
             # Group by page_idx for later usage.
             table_query = {'block_type': 'table'}
-            for page_id, bboxes in groupby(audited_bbox, key=lambda bbox: bbox.page_idx):
+            for page_id, bboxes in groupby(self.audited_bbox, key=lambda bbox: bbox.page_idx):
                 list_of_bbox = list(bboxes)
                 self.audited_bbox[page_id] = list_of_bbox
                 self.audited_table_bbox[page_id] = list(self.filter_list_of_bbox(list_of_bbox, **table_query))
+
         if BLOCK_DEBUG:
             print('Audited Table Boxes: ', self.audited_table_bbox)
+
+        # Tracking variables for PAWLs tokens + OpenContracts structural annotations
+        word_idx = 0
+        word_bbox_map = {}
+        token_id_to_page_map = {}
+        page_id_to_token_map = {}
+
         for page_idx, page in enumerate(pages):
+
+            page_style = pages[page_idx].attrs.get("style", None) or pages[0].attrs["style"]
+            page_style_kv = style_utils.get_style_kv(page_style)
+            page_height = float(page_style_kv['height'].replace("px", ""))
+            page_width = float(page_style_kv['width'].replace("px", ""))
+
+            pawls_page = {
+                "page": {
+                    "width": page_width,
+                    "height": page_height,
+                    "index": page_idx
+                },
+                "tokens": []
+            }
+
             all_p = page.find_all("p")
             svg_children = page.find('svg') or []
             lines_tag_list, rect_tag_list = Doc.remove_duplicate_svg_tags(soup, svg_children)
 
             self.page_svg_tags.append([lines_tag_list, rect_tag_list])
-            # page_style = pages[0].attrs["style"]
-            page_style = pages[page_idx].attrs.get("style", None) or pages[0].attrs["style"]
-            page_style_kv = style_utils.get_style_kv(page_style)
+
+            print(F"Page_style_kv for page {page_idx}: {page_style_kv}")
             page_width = style_utils.parse_px(page_style_kv["width"])
             self.page_width = self.page_width or page_width
             page_height = style_utils.parse_px(page_style_kv["height"])
             self.page_height = self.page_height or page_height
             header_cutoff = header_margin * page_height
             footer_cutoff = self.page_height - footer_margin * self.page_height
-            # print("page_dims: ", page_width, page_height)
-            # print("margins: ", header_margin*page_height, footer_margin*page_height)
+
             p_styles = []
             prev_box_style = None
             prev_line_style = None
             page_line_stats = {}
             prev_p_tag = None
             for line_idx, orig_p in enumerate(all_p):
+
+                # NOTE: orig_p is actually a some chunk of N words and style has absolute positional coordinates.
+
+                print(f"orig_p {line_idx}: {orig_p}")
+
                 # Reformat p if the text contains items to be replaced.
                 new_p = None
                 changed = False
@@ -194,6 +235,43 @@ class Doc:
                                 last_line_counts[text_only] = 1
                             else:
                                 last_line_counts[text_only] = last_line_counts[text_only] + 1
+
+                    p_kv = get_kv_from_attr(p.get('style'), ":")
+                    words = p.text.split()
+                    print(f"Pkv: {p_kv}")
+                    height = float(p_kv.get('height', 0))
+                    font_size = float(p_kv.get('font-size', '0px').replace("px", ""))
+                    word_start_positions_str = p_kv.get("word-start-positions", '[]')[1:-1]
+                    word_start_positions = get_word_positions(word_start_positions_str)
+                    print(f"word_start_positions:\n\t{word_start_positions}")
+                    word_end_positions_str = p_kv.get("word-end-positions", '[]')[1:-1]
+                    word_end_positions = get_word_positions(word_end_positions_str)
+                    print(f"word_end_positions:\n\t{word_end_positions}")
+
+                    assert len(word_start_positions) == len(word_end_positions)
+                    assert len(words) == len(word_start_positions)
+
+                    if self.calculate_opencontracts_data:
+                        print(f"Process run of {len(words)}")
+                        for index, w in enumerate(words):
+                            x0, y0 = word_start_positions[index]
+                            print(f"word start {x0}, {y0}")
+                            x1, y1 = word_end_positions[index]
+                            print(f"word end {x1}, {y1}")
+                            pawls_page['tokens'].append({
+                                "x": x0,
+                                "y": y0,
+                                "width": x1 - x0,
+                                "height": font_size,
+                                "text": w,
+                            })
+                            word_bbox_map[word_idx] = (x0, y0, x1, y1)
+                            token_id_to_page_map[word_idx] = page_idx
+                            page_id_to_token_map[page_idx] = word_idx
+                            word_idx += 1
+
+                    # TODO - add maps to map token ids and paragraph ids to bbox
+
                     box_style, line_style, word_line_styles = style_utils.parse_tika_style(
                         p["style"], p.text, page_width
                     )
@@ -277,10 +355,14 @@ class Doc:
                 most_freq_space = max(most_freq_spaces.items(), key=operator.itemgetter(1))[0]
             page_stats = {'lines': max_lines, 'most_frequent_space': most_freq_space}
             self.page_styles.append((page_style_kv, page_width, page_height, page_stats))
+
+            self.pawls_pages.append(pawls_page)
+
         if PERFORMANCE_DEBUG:
             new_wall_time = default_timer()
             print(f"Checkpoint 1 Finished. Wall time: {((new_wall_time - self.wall_time) * 1000):.2f}ms")
             self.wall_time = new_wall_time
+
         for line_style in self.line_style_space_stats:
             spaces = self.line_style_space_stats[line_style]
             space_counts = {}
@@ -294,12 +376,13 @@ class Doc:
                 if space_count > max_count:
                     max_count = space_count
                     most_frequent_space = space
-            self.line_style_space_stats[line_style] = {"avg": np.mean(spaces)/line_style[2],
-                                                       "median": np.median(spaces)/line_style[2],
+            self.line_style_space_stats[line_style] = {"avg": np.mean(spaces) / line_style[2],
+                                                       "median": np.median(spaces) / line_style[2],
                                                        "std": np.std(spaces),
                                                        "count": len(spaces),
                                                        "most_frequent_space": most_frequent_space,
                                                        "space_counts": space_counts}
+
         for line_style in self.line_style_word_space_stats:
             line_style_vl_word_spaces = self.line_style_word_space_stats[line_style]
 
@@ -309,9 +392,9 @@ class Doc:
                 "count": len(line_style_vl_word_spaces),
                 "std": np.std(line_style_vl_word_spaces),
             }
+
         for line_style in self.line_style_word_stats:
             line_style_vl_word_counts = self.line_style_word_stats[line_style]
-            # print(line_style_vl_word_counts)
             line_style_vl_word_stats_median = np.median(line_style_vl_word_counts)
             self.line_style_word_stats[line_style] = {
                 "avg": np.mean(line_style_vl_word_counts),
@@ -320,6 +403,7 @@ class Doc:
                 "is_justified": line_style_vl_word_stats_median < 2,
                 "count": np.sum(line_style_vl_word_counts),
             }
+
         self.visual_line_word_stats = {
             "avg": np.mean(vl_word_counts),
             "median": np.median(vl_word_counts),
@@ -334,6 +418,7 @@ class Doc:
             new_wall_time = default_timer()
             print(f"Checkpoint 2 Finished. Wall time: {((new_wall_time - self.wall_time) * 1000):.2f}ms")
             self.wall_time = new_wall_time
+
         for page_idx, page in enumerate(pages):
             if not page_p_styles or not page_p_styles[page_idx]:
                 continue
@@ -404,17 +489,17 @@ class Doc:
                                         abs(psv[-1]["box_style"][2] - bs[1]) <= gap + 20:
                                     return True
                     return False
+
                 if should_ignore and check_ignore_line_within_retained(page_visual_lines, box_style) and \
                         p_text not in string.punctuation:
                     should_ignore = False
                 if should_ignore:
                     if LINE_DEBUG:
-                        print("Skipping curr line: ",  p_text)
+                        print("Skipping curr line: ", p_text)
                     # Check we have some business to be taken care before we sign off the page.
                     if not (len(page_visual_lines) > 0 and line_idx == len(all_p) - 1):
                         line_idx = line_idx + 1
                         continue
-                # print(p.text, line_style)
                 line_info = {
                     "box_style": box_style,
                     "line_style": line_style,
@@ -428,8 +513,8 @@ class Doc:
                 }
                 if LINE_DEBUG:
                     print("\n")
-                    print("-"*80)
-                    print("curr line: ",  line_info['text'])
+                    print("-" * 80)
+                    print("curr line: ", line_info['text'])
 
                 # assign a style name to the font/line style (only font characteristics)
                 word_classes = []
@@ -445,6 +530,9 @@ class Doc:
                 line_idx = line_idx + 1
             page_blocks, group_buf, block_idx, group_is_list, vl_from_prev_page_discarded = \
                 self.visual_lines_to_blocks(page_visual_lines, group_buf, block_idx, group_is_list)
+
+            # TODO - convert blocks to tokens
+
             # a page has ended
             order_offset = 0
             if has_lines_from_previous_page:
@@ -457,7 +545,6 @@ class Doc:
             page_blocks, is_reordered = oo_fixer.reorder()
             for i in range(2):
                 if len(page_blocks) > 0 and Doc.has_page_number(page_blocks[-1]["block_text"], last_line_counts):
-                    # print("---removing", page_blocks[-1]["block_text"])
                     page_blocks.pop()
             # Last block in the previous page might get attached to the current page.
             # Due to TIKA placing of p-tags, we might receive the first Visual Line as the last one,
@@ -489,7 +576,7 @@ class Doc:
                     t_blocks.extend(page_blocks[:page_block_start_block_num])
                 blocks = blocks[:-last_page_blocks_len] + t_blocks
             blocks_by_page.append(page_blocks[page_block_start_block_num:])
-            # print(">>>>>>>>>>>>>>>last block: ", page_blocks[-1]['block_text'], group_buf[0]['page_idx'])
+
             for pb in page_blocks[page_block_start_block_num:]:
                 blocks.append(pb)
             page_blocks = []
@@ -546,6 +633,38 @@ class Doc:
             print(f"Checkpoint 3 Finished. Wall time: {((new_wall_time - self.wall_time) * 1000):.2f}ms")
             self.wall_time = new_wall_time
         self.blocks = blocks
+
+        # Only perform this calculation if self.calculate_opencontracts_data is set to True
+        if self.calculate_opencontracts_data:
+            for annot_id, b in enumerate(self.blocks):
+                search_tokens = self.pawls_pages[b['page_idx']]['tokens']
+                bbox = b['box_style']
+                block = (bbox.left, bbox.top, bbox.right, bbox.top + bbox.height)
+                token_ids_in_block = find_tokens_in_block(search_tokens, block)
+                annotation_json: dict[int, OpenContractsSinglePageAnnotationType] = {
+                    int(b['page_idx']): {
+                        'bounds': {
+                            "top": bbox.top,
+                            "bottom": bbox.top + bbox.height,
+                            "left": bbox.left,
+                            "right": bbox.right
+                        },
+                        'tokensJsons': [
+                            {"tokenIndex": token_id, 'pageIndex': int(b['page_idx'])} for token_id in token_ids_in_block
+                        ],
+                        'rawText': b['block_text']
+                    }
+                }
+                annotation: OpenContractsAnnotationPythonType = {
+                    "id": annot_id,
+                    "annotationLabel": b["block_type"]+(b.get('block_level', '')),
+                    "rawText": b["block_text"],
+                    "page": b['page_idx'],
+                    "annotation_json": annotation_json
+                }
+                self.oc_annotations.append(annotation)
+
+        pprint.pprint(blocks[-1])
         self.blocks_by_page = blocks_by_page
         self.save_file_stats()
         self.organize_and_indent_blocks()
@@ -588,8 +707,8 @@ class Doc:
 
             # is_multi_class_line = len(word_class) > 1
             is_list_start, is_list_start_separate_line, \
-            is_mixed_font, group_is_table_row, \
-            is_new_group, line_idx, prev_line_info, line_info = self.detect_new_group(
+                is_mixed_font, group_is_table_row, \
+                is_new_group, line_idx, prev_line_info, line_info = self.detect_new_group(
                 line_idx,
                 line_info,
                 prev_line_info,
@@ -601,12 +720,12 @@ class Doc:
             )
             is_mixed_font = False  # turn it off until fixed
             if is_new_group or is_mixed_font or line_idx == len(visual_lines) - 1:
-            # if ((is_new_group or (is_new_group and (line_idx == len(visual_lines) - 1))) and not should_ignore) \
-            #         or is_mixed_font:
+                # if ((is_new_group or (is_new_group and (line_idx == len(visual_lines) - 1))) and not should_ignore) \
+                #         or is_mixed_font:
                 if line_idx == len(visual_lines) - 1 and not is_new_group and not should_ignore:
                     group_buf.append(line_info)
                 # group only has everything until previous line
-                group_class_name = ( 
+                group_class_name = (
                     Counter(prev_line_info["word_classes"]).most_common()[0][0]
                     if prev_line_info
                     else line_info["class"]
@@ -765,6 +884,7 @@ class Doc:
                                                                                     vl["line_style"][5]):
                                     return True
                                 return False
+
                             if (page_stats['most_frequent_space'] and
                                 gap_bw_lines > -(5 * page_stats['most_frequent_space']) and
                                 abs(gap_bw_lines) > 1.2 * page_stats['most_frequent_space'] and
@@ -952,6 +1072,7 @@ class Doc:
                 #         or vl["page_idx"] != line_info["page_idx"])
                 return vl["page_idx"] != line_info["page_idx"]
                 # return  not vl_same_top
+
             mismatches = list(filter(different_group, group_buf))
             n_mismatches = len(mismatches)
             if n_mismatches > 0 and len(group_buf) > 1:
@@ -973,7 +1094,7 @@ class Doc:
             is_new_group = (
                     not same_top  # a different table row
                     or prev_line_info["page_idx"] != line_info["page_idx"]  # change in page
-                    # or not is_table_row # no longer a table row
+                # or not is_table_row # no longer a table row
             )
             if is_new_group and not same_top and not change_in_class:
                 prev_line_bottom = prev_line_info["box_style"][0] + prev_line_info["box_style"][4]
@@ -1005,11 +1126,13 @@ class Doc:
 
         # a list is starting with just a bullet point, adjoining text appearing on different line
         is_list_start_separate_line = (
-            (lp_line.length == 1 and lp_line.is_list_item and not (group_is_table_row and same_top))
-            or ((lp_line.is_list_item or lp_line.numbered_line) and not (group_is_table_row and same_top))
-            # or (lp_line.numbered_line and not (group_is_table_row and same_top))
-            or (lp_line.length < 6 and lp_line.numbered_line and not same_top)
-        ) and not same_top
+                                              (lp_line.length == 1 and lp_line.is_list_item and not (
+                                                      group_is_table_row and same_top))
+                                              or ((lp_line.is_list_item or lp_line.numbered_line) and not (
+                                              group_is_table_row and same_top))
+                                              # or (lp_line.numbered_line and not (group_is_table_row and same_top))
+                                              or (lp_line.length < 6 and lp_line.numbered_line and not same_top)
+                                      ) and not same_top
         # If there are previous VL in the same line as the detected list item,
         # and if its a justified block, may be tika is giving the each word as a tag
         # and thus resulting in getting identified as list item.
@@ -1022,10 +1145,10 @@ class Doc:
             prev_list_start_separate_line = (
                     prev_line_info and ((len(prev_line_info['text']) == 1 and self.is_list_item(prev_line_info)) or
                                         (
-                                            is_list_start
-                                            and not same_top
-                                            and (prev_line_info["lp_line"].is_list_item or
-                                                 prev_line_info["lp_line"].numbered_line)
+                                                is_list_start
+                                                and not same_top
+                                                and (prev_line_info["lp_line"].is_list_item or
+                                                     prev_line_info["lp_line"].numbered_line)
                                         ))
             )
             out_of_order_list = (prev_list_start_separate_line
@@ -1035,8 +1158,8 @@ class Doc:
         # out_of_order_list = False
         # a list is starting with bullet point appearing before line in the same text block
         is_list_start_same_line = (
-            (lp_line.length > 3 and self.is_list_item(line_info))
-            or (lp_line.length < 6 and lp_line.numbered_line and not same_top)
+                (lp_line.length > 3 and self.is_list_item(line_info))
+                or (lp_line.length < 6 and lp_line.numbered_line and not same_top)
         )
         line_start_idx = 0
         if is_list_start_same_line:
@@ -1088,8 +1211,8 @@ class Doc:
             print("=" * 80)
 
         return is_list_start, is_list_start_separate_line, \
-               is_mixed_font, group_is_table_row, \
-               is_new_group, line_idx, prev_line_info, line_info
+            is_mixed_font, group_is_table_row, \
+            is_new_group, line_idx, prev_line_info, line_info
 
     def count_possible_cells(self, group_buf):
         if group_buf[0]['line_parser']['numbered_line'] or group_buf[0]['line_parser']['numbered_line']:
@@ -1123,11 +1246,11 @@ class Doc:
                                                  line_info['line_parser']["last_word_number"])
                     if (((group_buf[-1]['line_parser']['numbered_line'] and
                           not group_buf[-1]['line_parser']['is_table_row']) or
-                        group_buf[0]['line_parser']['numbered_line'] or self.is_list_item(group_buf[0]))
+                         group_buf[0]['line_parser']['numbered_line'] or self.is_list_item(group_buf[0]))
                             and opt_cond):
-                    # if (group_buf[0]['text'].startswith("(")
-                    #         and ")" in group_buf[0]['text']
-                    #         and group_buf[0]['line_parser']['numbered_line']):
+                        # if (group_buf[0]['text'].startswith("(")
+                        #         and ")" in group_buf[0]['text']
+                        #         and group_buf[0]['line_parser']['numbered_line']):
                         is_list = True
                     elif line_info['text'][0] not in line_parser.continuing_chars:
                         # print("table start buf -------")
@@ -1146,10 +1269,10 @@ class Doc:
                                 prev_buf_bstyle = group_buf[-1]['box_style']
                                 buf_bstyle = line_info['box_style']
                                 if len(list(range(max(int(buf0_bstyle[1]), int(buf_bstyle[1])),
-                                                  min(int(buf0_bstyle[2]), int(buf_bstyle[2]))+1))) \
+                                                  min(int(buf0_bstyle[2]), int(buf_bstyle[2])) + 1))) \
                                         >= 0.4 * (int(buf_bstyle[2]) - int(buf_bstyle[1])) and \
                                         list(range(max(int(buf0_bstyle[1]), int(prev_buf_bstyle[1])),
-                                                   min(int(buf0_bstyle[2]), int(prev_buf_bstyle[2]))+1)):
+                                                   min(int(buf0_bstyle[2]), int(prev_buf_bstyle[2])) + 1)):
                                     # Mark as not a table_row if the first VL is more than
                                     # 40% the length of the current VL
                                     is_table_row = False
@@ -1239,7 +1362,7 @@ class Doc:
                 and prev_line_info["page_idx"] == line_info["page_idx"]
         ):
             line_info["space"] = (
-                    round(line_info["box_style"][0] - prev_line_info["box_style"][0], 1)
+                round(line_info["box_style"][0] - prev_line_info["box_style"][0], 1)
             )
             # these are table columns
             # if class_name == 'cls_26' and line_info['space'] < 0:
@@ -1269,7 +1392,8 @@ class Doc:
                                 (vl['box_style'][4] <= line_info['box_style'][4]) and
                                 ((line_info["space"] >= 0 and
                                   len(list(range(max(int(vl['box_style'][1]), int(line_info['box_style'][1])),
-                                                 min(int(vl['box_style'][2]), int(line_info['box_style'][2]))+1))) > 0)
+                                                 min(int(vl['box_style'][2]),
+                                                     int(line_info['box_style'][2])) + 1))) > 0)
                                  or
                                  (line_info["space"] < 0 and block_buf[0]['box_style'][2] < line_info['box_style'][1]))
                         )
@@ -1294,7 +1418,7 @@ class Doc:
                     max_top_vl = vl
                 if vl["box_style"][0] < min_top:
                     min_top = vl["box_style"][0]
-            
+
             if not same_top and group_is_table_row and min_top < box_style[0] < max_top:
                 same_top = True
             # if not same_top and line_info["space"] < 0 and not group_is_table_row:
@@ -1317,7 +1441,8 @@ class Doc:
                 # print("line is superscript: ", line_info["text"], "-->", prev_line_info["text"])
                 line_info['is_superscript'] = True
             if "is_superscript" in prev_line_info:
-                follows_superscript = 1.0 * prev_line_info["box_style"][4] < top_difference < 1.1 * prev_line_info["box_style"][4]
+                follows_superscript = 1.0 * prev_line_info["box_style"][4] < top_difference < 1.1 * \
+                                      prev_line_info["box_style"][4]
             if follows_superscript:
                 line_info['follows_superscript'] = True
 
@@ -1369,11 +1494,11 @@ class Doc:
                     has_more_space = (
                         # line_info['space'] > line_height_threshold * line_style[2]
                         # or
-                        line_style not in self.line_style_space_stats
-                        or
-                        line_info['space'] > 1.1*self.line_style_space_stats[line_style]['most_frequent_space']
-                        or
-                        (line_info['space'] < 0 and not is_superscript)
+                            line_style not in self.line_style_space_stats
+                            or
+                            line_info['space'] > 1.1 * self.line_style_space_stats[line_style]['most_frequent_space']
+                            or
+                            (line_info['space'] < 0 and not is_superscript)
                     )
                     if has_more_space and line_style not in self.line_style_space_stats and \
                             prev_line_style in self.line_style_space_stats:
@@ -1434,7 +1559,7 @@ class Doc:
                             buf_text = buf_text + self.check_add_space_btw_texts(buf_text, vl["text"]) + vl["text"]
                         if buf_text:
                             lp_json = line_parser.Line(buf_text).to_json()
-                            if lp_json['numbered_line'] and not prev_line_ends_with_line_delim\
+                            if lp_json['numbered_line'] and not prev_line_ends_with_line_delim \
                                     and not high_top_difference:
                                 shifts_left = False
                     is_new_para = has_more_space or shifts_left or high_top_difference or \
@@ -1449,7 +1574,7 @@ class Doc:
                             and (abs(top_difference) > (line_info["line_style"].font_size * 1.5)):
                         is_new_para = True
                     # If both the lines are numbered items and are in different lines
-                    if not is_new_para and not same_top and line_info["lp_line"].numbered_line and\
+                    if not is_new_para and not same_top and line_info["lp_line"].numbered_line and \
                             prev_line_info["lp_line"].numbered_line and prev_line_style == line_info["line_style"]:
                         is_new_para = True
                     if is_new_para and not has_more_space and high_top_difference and \
@@ -1504,14 +1629,13 @@ class Doc:
             #     has_more_space = has_more_space  # False
             # else:
 
-
-    #     print(">>> superscript", line_info['text'], is_superscript, follows_superscript, change_in_class)
-    #     merge_vls_if_needed
+        #     print(">>> superscript", line_info['text'], is_superscript, follows_superscript, change_in_class)
+        #     merge_vls_if_needed
         return change_in_class, is_new_para, same_top
 
     def should_ignore_line(self, all_p, is_page_footer, is_page_header, last_line_counts, line_idx, loc_key, lp_line, p,
                            page_footers, page_headers, page_idx, box_style, page_visual_lines):
-        if box_style[4] < 1:    # Really small text
+        if box_style[4] < 1:  # Really small text
             return True, False
         if line_idx > len(all_p) - 2 or line_idx < 2:
             num_only = not_a_number_pattern.sub("", p.text).strip()
@@ -1630,7 +1754,7 @@ class Doc:
         self.normal_styles = []
         self.footnote_styles = []
         cutoff_lower = median_font_size  # avg_font_size - font_size_sd
-        cutoff_higher = avg_font_size + 0.25*font_size_sd
+        cutoff_higher = avg_font_size + 0.25 * font_size_sd
         for line_style in keys_by_size:
             # if line_style[2] > cutoff_higher or line_style[3] > 400:
             if (line_style[2] > mode_font_size or line_style[3] > 400) or \
@@ -1737,7 +1861,8 @@ class Doc:
                 line_style[2],
                 600,
                 'none',
-                'left'
+                'left',
+                # TODO - text_align unfilled?
             )
 
             if cloned_style in self.header_styles:
@@ -1790,7 +1915,7 @@ class Doc:
                 vl['text'] = prev_vl['text'].strip()[-1] + vl['text']
                 prev_vl['text'] = prev_vl['text'].strip()[:-1]
             if prev_vl['text'].strip() in ['$', '€', '£'] and vl['text'].strip()[0] not in ['$', '€', '£', '%']:
-                    # and vl['line_parser']['words'][0]['is_number']):#sometimes it has _ and other stuff
+                # and vl['line_parser']['words'][0]['is_number']):#sometimes it has _ and other stuff
                 should_merge = True
             elif vl["word_classes"][0] != prev_vl["word_classes"][-1] and \
                     len(vl['text']) > 1 and len(prev_vl['text']) > 1:
@@ -1827,7 +1952,7 @@ class Doc:
                             # to that of the previous VL and the current VL. In that case it will be
                             # most probably a justified text
                             if vls_has_single_words and vl_id < len(vls) - 2:
-                                gap_1, _, _, _ = self.get_gaps_from_vls(vls[vl_id+2], vl)
+                                gap_1, _, _, _ = self.get_gaps_from_vls(vls[vl_id + 2], vl)
                                 if gap < 0.7 * gap_1:
                                     should_merge = False
                             if should_merge:
@@ -1874,7 +1999,7 @@ class Doc:
                         vl['box_style'][0] <= (prev_vl['box_style'][0] + (2 * prev_vl['box_style'][4])) and \
                         vl['text'].strip() not in ['$', '€', '£'] and \
                         len(list(range(max(int(prev_vl['box_style'][1]), int(vl['box_style'][1])),
-                                       min(int(prev_vl['box_style'][2]), int(vl['box_style'][2]))+1))):
+                                       min(int(prev_vl['box_style'][2]), int(vl['box_style'][2])) + 1))):
                     should_merge = True
             if should_merge:
                 # print("merging: ", prev_vl["text"][0:80], "->", vl["text"][0:80], gap, normal_gap, is_justified, avg_merge_gap)
@@ -1904,7 +2029,6 @@ class Doc:
             vls = block["visual_lines"]
             word_stats = self.line_style_word_stats[vls[0]["line_style"]]
             lines = []
-            block_text = None
             if word_stats["is_justified"]:
                 prev_vl = vls[0]
                 vl_buf = [prev_vl]
@@ -1955,10 +2079,6 @@ class Doc:
                 collected_row = []
         self.blocks = blocks
 
-    # def set_bounds(self, block):
-    #     min_top = 0;
-    #     max_top = 0;
-    #     min_lef
     def get_page_alignment(self, block):
         block_right = block['visual_lines'][-1]['box_style'][2]
         print("alignment is ", self.page_width, block_right)
@@ -1968,7 +2088,6 @@ class Doc:
         prev_block = None
         prev_line_style = None
         indent = 0
-        level_stack = []
         table_start_idx = -1
         table_end_idx = -1
         header_block_idx = -1
@@ -2002,7 +2121,7 @@ class Doc:
                 # if we are within the bounds and table_start_idx is not yet set
                 table_start_idx = block_idx
                 block["block_type"] = 'table_row'
-            # print("state: ", block_idx, len(organized_blocks))
+
             if not svg_page_tags and not prev_block:
                 svg_page_tags = self.page_svg_tags[block["page_idx"]]
             new_page = prev_block and prev_block["page_idx"] != block["page_idx"]
@@ -2011,7 +2130,7 @@ class Doc:
                     print('processing blocks in page: ', block["page_idx"])
                 svg_page_tags = self.page_svg_tags[block["page_idx"]]
 
-            probable_table_block = False    # self.check_block_within_svg_tags(block, prev_block)
+            probable_table_block = False  # self.check_block_within_svg_tags(block, prev_block)
             if probable_table_block:
                 block['probable_table_block'] = True
             if BLOCK_DEBUG:
@@ -2240,10 +2359,10 @@ class Doc:
                     # print("++++", non_table_row_count, "...........", block["block_text"], block["block_type"])
                     # Check there is a line between the blocks. If not, increment the non_table_row_count.
                     if prev_block and not Doc.check_line_between_box_styles(
-                        prev_block['box_style'],
-                        block['box_style'],
-                        svg_page_tags[0],
-                        check_gap=True,
+                            prev_block['box_style'],
+                            block['box_style'],
+                            svg_page_tags[0],
+                            check_gap=True,
                     ):
                         non_table_row_count = non_table_row_count + 1
                         table_row_count = 0
@@ -2326,7 +2445,7 @@ class Doc:
                         check_again = False
             bad_sequence = not is_table_row and n_rows == 3 and non_table_row_count == 2
             italic_center = self.detect_block_center_aligned(block) and len(block["visual_lines"]) == 1 and \
-                block["visual_lines"][0]["line_style"][1] == "italic"
+                            block["visual_lines"][0]["line_style"][1] == "italic"
             if bad_sequence:
                 # Check if the gap between the lines is considerable for a table row.
                 prev_block_style = prev_block['box_style']
@@ -2389,7 +2508,7 @@ class Doc:
                     curr_box = block_vl['box_style']
                     block_box = block['box_style']
                     intersection_points = list(range(max(int(prev_box[1]), int(curr_box[1])),
-                                                     min(int(prev_box[2]), int(curr_box[2]))+1))
+                                                     min(int(prev_box[2]), int(curr_box[2])) + 1))
 
                     if (intersection_points and not block_vl["line_style"] == left_most_vl["line_style"]) or \
                             block_box[1] < min_left or curr_box[3] > 0.6 * self.page_width or \
@@ -2451,7 +2570,7 @@ class Doc:
                 prev_block_style = prev_block['box_style']
                 prev_blk_bottom = prev_block_style[0] + prev_block_style[4]
                 space_bw_curr_and_prev = block['box_style'][0] - prev_blk_bottom
-                if Doc.check_line_between_box_styles(prev_block['box_style'], block['box_style'], svg_page_tags[0]) and\
+                if Doc.check_line_between_box_styles(prev_block['box_style'], block['box_style'], svg_page_tags[0]) and \
                         0 < space_bw_curr_and_prev < prev_block_style[4]:
                     no_more_table_rows = False
                     align_count, _, _ = table_parser.get_alignment_count(prev_block, block)
@@ -2468,7 +2587,7 @@ class Doc:
                 print("\t rc: ", non_table_row_count, "ts: ", len(block['block_text'].split()) > 10, different_style,
                       aligned_para)
             #     print("\t", prev_block["box_style"], block["box_style"])
-                # table_parser.para_aligned_with_prev_row(self.page_width, prev_table_row, block, debug=True)
+            # table_parser.para_aligned_with_prev_row(self.page_width, prev_table_row, block, debug=True)
 
             different_section = False
             too_much_space = False
@@ -2490,7 +2609,7 @@ class Doc:
                 curr_top = block['box_style'][0]
                 prev_bottom = prev_top + prev_block['box_style'][4]
                 curr_bottom = curr_top + block['box_style'][4]
-                bottom_space = (curr_bottom - prev_bottom)/block['box_style'][4]
+                bottom_space = (curr_bottom - prev_bottom) / block['box_style'][4]
                 top_diff = curr_top - prev_top
                 top_space = top_diff / prev_block['box_style'][4]
                 # print("...block::", block["block_text"][0:80])
@@ -2501,7 +2620,8 @@ class Doc:
                                      and curr_top > prev_bottom and \
                                      curr_top - prev_bottom > 1.5 * block['box_style'][4]
                     if space_bw_table_rows and (curr_top - prev_bottom) > 2 * space_bw_table_rows and \
-                            (curr_top - prev_bottom) > 2 * self.line_style_space_stats[line_style]['most_frequent_space']:
+                            (curr_top - prev_bottom) > 2 * self.line_style_space_stats[line_style][
+                        'most_frequent_space']:
                         double_space_bw_table_rows = True
                     # if too_much_space:
                     #     print("++++++", block["block_text"][0:20], too_much_space, top_diff, self.line_style_space_stats[line_style]['most_frequent_space'])
@@ -2575,17 +2695,17 @@ class Doc:
                                 (curr_top > prev_table_row['box_style'][0] + prev_table_row['box_style'][4] or
                                  prev_table_row["page_idx"] != block["page_idx"]):
                             align_count, prev_count, align_pos = table_parser.get_alignment_count(prev_table_row, block)
-                            align_threshold = 2/3
+                            align_threshold = 2 / 3
                             if prev_count > 1:
                                 # print("-------------------", prev_table_row["block_text"][0:80], align_count, prev_count, align_count/prev_count)
                                 # print("\t\t", block["block_text"][0:80])
-                                alignment_break = (align_count < 2 or align_count/prev_count < align_threshold)
+                                alignment_break = (align_count < 2 or align_count / prev_count < align_threshold)
                                 if alignment_break and align_count == vhu.find_num_cols(block)[0]:
                                     # Reset the alignment break, if all the columns are aligned somehow with
                                     # the previous row
                                     alignment_break = False
                                 elif alignment_break and \
-                                        align_count/len(block["visual_lines"]) >= align_threshold and \
+                                        align_count / len(block["visual_lines"]) >= align_threshold and \
                                         0 < block_idx - prev_table_row["block_idx"] < 3:
                                     # If most of the visual lines align and if the previous table row is within 3 blocks
                                     alignment_break = False
@@ -2645,7 +2765,7 @@ class Doc:
                                  and not page_change
                                  and block['box_style'][1] > prev_block['box_style'][2])
             different_column = (prev_block
-                                 and not page_change
+                                and not page_change
                                 and block['box_style'][0] < prev_block['box_style'][0])
 
             new_table = (different_section and is_table_row) or \
@@ -2664,7 +2784,7 @@ class Doc:
             table_ended = (no_more_table_rows
                            or new_table
                            or different_section
-                           or (page_change and not page_change_alignment_style_check))\
+                           or (page_change and not page_change_alignment_style_check)) \
                           and not block_within_table_bbox
             if table_ended:
                 table_start_set = False
@@ -2836,7 +2956,7 @@ class Doc:
                     self.header_styles.remove(a_block["visual_lines"][-1]["line_style"])
                     # Revert any old blocks that was converted to header back to its original type
                     for b in para_to_header_blocks_font_decider:
-                        if b["visual_lines"][-1]["line_style"] == a_block["visual_lines"][-1]["line_style"] and\
+                        if b["visual_lines"][-1]["line_style"] == a_block["visual_lines"][-1]["line_style"] and \
                                 b.get("orig_block_type", "") and b["orig_block_type"] == "para" and \
                                 ends_with_sentence_delimiter_pattern.search(b["block_text"]) is not None:
                             b["block_type"] = b["orig_block_type"]
@@ -2882,7 +3002,7 @@ class Doc:
                                 if self.has_smaller_or_lighter_header_font(prev_class_name, curr_class_name):
                                     # Check whether the previous word is of higher font than the current one.
                                     different_fonts = True
-                    if (lp_first_sent.is_header or lp_first_sent.is_header_without_comma) and\
+                    if (lp_first_sent.is_header or lp_first_sent.is_header_without_comma) and \
                             (not lp_first_sent.is_reference_author_name or different_fonts):
                         a_block["block_type"] = "header"
                         a_block["list_type"] = Doc.get_list_item_subtype(a_block)
@@ -2923,7 +3043,7 @@ class Doc:
                         if lp_first_sent.is_header and len(a_block["visual_lines"]) > 1 and para_sentence:
                             add_para_block = True
                         elif lp_first_sent.is_header and (len(a_block["visual_lines"]) == 1 or
-                                                                         not para_sentence) and not lp_first_sent:
+                                                          not para_sentence) and not lp_first_sent:
                             a_block["block_type"] = "header"
                             a_block["block_sents"] = [first_sent]
                             a_block["block_text"] = title
@@ -3034,12 +3154,12 @@ class Doc:
                         if para_props.numbered_line:
                             para_block['block_type'] = 'list_item'
                             para_block["list_type"] = Doc.get_list_item_subtype(para_block)
-                        organized_blocks.insert(idx+1, para_block)
+                        organized_blocks.insert(idx + 1, para_block)
                     i += 1
 
             self.post_fix(a_block)
             i += 1
-        
+
         self.blocks = self.parse_special_lists(organized_blocks)
         self.divide_para_to_headers()
         self.merge_para_blocks()
@@ -3091,9 +3211,9 @@ class Doc:
                 # print(line["text"])
                 # print(noun_chunk == text, bolded_text, large_text)
                 if not ((upper_check or noun_chunk) and bolded_text and large_text):
-                    return False  
+                    return False
             return True
-        
+
         def blocks_to_list(start_idx, end_idx):
             header_text = ""
             header_idx = end_idx
@@ -3125,7 +3245,7 @@ class Doc:
                     if curr_block in blocks:
                         blocks[j] = underwriter_block
                     else:
-                        blocks.insert(j+1, underwriter_block)
+                        blocks.insert(j + 1, underwriter_block)
                         j += 1
                         # i += 1
                         end_idx += 1
@@ -3146,7 +3266,7 @@ class Doc:
             # check if the table is underwriter
             if is_table and is_special:
                 is_special = check_special_line(block)
-                            
+
             # another method to check from special header "co-managers" then down
             if 0 < len(block["visual_lines"]) < 4 and block["visual_lines"][0]["line_style"][1] == "italic" \
                     and self.detect_block_center_aligned(block):
@@ -3161,13 +3281,13 @@ class Doc:
                         center_italic_idx += 1
 
             if center_italic_idx > i and not is_special:
-                blocks_to_list(i+1, center_italic_idx - 1)
+                blocks_to_list(i + 1, center_italic_idx - 1)
                 center_italic_idx = 0
             # table ended, check if needs to be converted to list
             elif "is_table_end" in block or "one_row_table" in block:
                 end_idx = i
                 # take care of 1 column underwriter case (only for table)
-                if i + 1 < len(blocks) and block["block_class"] == blocks[i+1]["block_class"]:
+                if i + 1 < len(blocks) and block["block_class"] == blocks[i + 1]["block_class"]:
                     end_idx += 1
                 if is_special:
                     blocks_to_list(table_start_idx, max(center_italic_idx, end_idx))
@@ -3176,9 +3296,9 @@ class Doc:
 
             if "one_row_table" in block:
                 del block["one_row_table"]
-               
-            i += 1  
-        return blocks 
+
+            i += 1
+        return blocks
 
     def calculate_block_bounds_from_vls(self, blocks):
         top = blocks[0]['visual_lines'][0]['box_style'][0]
@@ -3189,7 +3309,7 @@ class Doc:
             left = min(block['visual_lines'][0]['box_style'][1], left)
             right = max(block['visual_lines'][-1]['box_style'][2], right)
 
-        #returns x, y, w, h
+        # returns x, y, w, h
         return (left, top, right, bottom)
 
     def calculate_block_bounds(self, blocks):
@@ -3200,17 +3320,19 @@ class Doc:
         for block in blocks:
             left = min(block['box_style'][1], left)
             right = max(block['box_style'][2], right)
-        #returns x, y, w, h
+        # returns x, y, w, h
         return (left, top, right - left, bottom - top)
 
-    def make_table_with_footers(self, block_idx, footer_count, footers, organized_blocks, table_start_idx, table_end_idx):
+    def make_table_with_footers(self, block_idx, footer_count, footers, organized_blocks, table_start_idx,
+                                table_end_idx):
         possible_table_blocks = organized_blocks[table_start_idx: table_end_idx - footer_count]
         (left, top, w, h) = self.calculate_block_bounds(possible_table_blocks)
         # see if the row before belongs to the table too
         if table_start_idx > 0:
             prev_block = organized_blocks[table_start_idx - 1]
             curr_top_block = organized_blocks[table_start_idx]
-            same_class = prev_block["visual_lines"][-1]["line_style"] == curr_top_block["visual_lines"][-1]["line_style"]
+            same_class = prev_block["visual_lines"][-1]["line_style"] == curr_top_block["visual_lines"][-1][
+                "line_style"]
             prev_box = prev_block["box_style"]
             curr_top_box = curr_top_block["box_style"]
             # look forward to see if there is alignment
@@ -3229,7 +3351,7 @@ class Doc:
                                                                   x_axis_relaxed=True)))
                     and "is_table_end" not in prev_block
                     and prev_block["block_type"] != "header_modified_to_para"
-                    and (prev_box[1]/left > 1.1)  # or is_aligned)
+                    and (prev_box[1] / left > 1.1)  # or is_aligned)
                     and prev_box[0] < curr_top_box[0]
                     and not self.detect_block_center_aligned(prev_block)
                     and not prev_block["block_text"].isupper()):
@@ -3321,7 +3443,7 @@ class Doc:
         #     print(class_stat['n_joined_lines'])
         if class_stat["n_joined_lines"] > 0:
             class_stat["avg_space"] = (
-                class_stat["total_space"] / class_stat["n_joined_lines"]
+                    class_stat["total_space"] / class_stat["n_joined_lines"]
             )
         self.class_stats[group_class_name] = class_stat
         buf_info = group_buf[0]
@@ -3387,7 +3509,8 @@ class Doc:
             'space': 0.0,
             'lp_line': lp_line,
             'line_parser': lp_line.to_json(),
-            'changed': (first["changed"] if "changed" in first else False) or (second["changed"] if "changed" in second else False)
+            'changed': (first["changed"] if "changed" in first else False) or (
+                second["changed"] if "changed" in second else False)
 
         }
         return combined_block
@@ -3471,7 +3594,7 @@ class Doc:
                                            np.percentile(diff_of_pages, 75) <= 2)):
                 if num_matched_pages > 0.5 * num_pages or hf_key.text == '' or \
                         (num_matched_pages > 0.2 * num_pages and max(list_of_pages) > 2) or \
-                            (num_matched_pages > 5 and max(list_of_pages) > 2):
+                        (num_matched_pages > 5 and max(list_of_pages) > 2):
                     # 50% of pages have these OR if text is empty, this is most likely to be a footer with Page numbers
                     if HF_DEBUG:
                         print("will skip header/footer: ", matched_keys, list_of_pages)
@@ -3650,7 +3773,7 @@ class Doc:
                     print("\tvl ", vl['text'])
                     print("\tvl buf has ", len(vl_merge_buf))
                 vl_style = self.class_line_styles[vl['word_classes'][0]]
-                if vl['box_style'][1] <= prev_vl['box_style'][2] + 1.5*vl_style[5]:
+                if vl['box_style'][1] <= prev_vl['box_style'][2] + 1.5 * vl_style[5]:
                     vl_merge_buf.append(vl)
                     if MERGE_DEBUG:
                         print("\tadding to buffer: ", vl['text'])
@@ -3708,7 +3831,7 @@ class Doc:
             # 'line_props': line_props,
             "visual_lines": vls,
             "block_class": (blocks[1] if len(blocks) > 1 else blocks[0])["block_class"],
-            "block_sents": sent_tokenize(merged_text), 
+            "block_sents": sent_tokenize(merged_text),
         }
         if lp_line.is_list_item:
             merged_block["list_type"] = lp_line.list_type
@@ -3797,7 +3920,7 @@ class Doc:
         # We are not going to be strict about the bottom of box_style and right of box_style
         # Do we need to ?
         return ((top - box_style[4]) <= box_style[0] <= (bottom + box_style[4])) and \
-               (left <= box_style[1] <= right)
+            (left <= box_style[1] <= right)
 
     def check_block_within_table_bbox(self, block):
         """
@@ -4007,7 +4130,7 @@ class Doc:
 
                 # Now we have the vls grouped by same top.
                 num_headers = vls_types.count("header")
-                if num_headers and num_headers/len(vls_types) > 0.75:
+                if num_headers and num_headers / len(vls_types) > 0.75:
                     # More than 75% of text is header. Break here
                     for vl_group in same_line_vl_group:
                         merged_text = " ".join([s['text'].strip() for s in vl_group])
@@ -4072,7 +4195,7 @@ class Doc:
                 prev_temp_idx = -1
                 rev_start_idx = -1
                 if (blk["page_idx"] == temp_blocks[-1]["page_idx"] and len(temp_blocks) > 1 and
-                        temp_blocks[-1]["page_idx"] != temp_blocks[-2]["page_idx"]) and \
+                    temp_blocks[-1]["page_idx"] != temp_blocks[-2]["page_idx"]) and \
                         temp_blocks[-1]["block_type"] != "header":
                     rev_start_idx = -2
                 for t_blk_idx, t_blk in enumerate(temp_blocks[rev_start_idx::-1]):
@@ -4181,7 +4304,7 @@ class Doc:
                     and ends_with_sentence_delimiter_pattern.search(temp_blocks[-1]["block_text"]) is None \
                     and not blk.get("is_row_group", False) \
                     and temp_blocks[-1]['visual_lines'][-1]["line_parser"].get("last_word_is_co_ordinate_conjunction",
-                                                                                False):
+                                                                               False):
                 # We are merging a previous para with a header if the previous para ends with a conjunction and
                 # are of the same block class
                 merged_text = temp_blocks[-1]["block_text"]
@@ -4633,4 +4756,3 @@ class Doc:
                     ret_val = True
                     break
         return ret_val
-

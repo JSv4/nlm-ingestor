@@ -1,3 +1,5 @@
+from typing import Literal
+
 from nlm_ingestor.ingestor_utils.ing_named_tuples import BoxStyle, LineStyle
 
 font_weights = {"normal": 400, "bold": 600, "bolder": 900, "lighter": 200}
@@ -5,16 +7,22 @@ font_families = {"bold": 600, "light": 200}
 font_scale = 1.2
 
 
-def parse_tika_style(style_str: str, text_str: str, page_width: float) -> dict:
+def parse_tika_style(
+    style_str: str,
+    text_str: str,
+    *args,
+    text_transform: Literal['none', 'uppercase', 'lowercase'] = 'none',
+    text_align: Literal['left', 'center', 'right'] = 'left',
+    **kwargs
+) -> tuple[BoxStyle, LineStyle, list[LineStyle]]:
     """
-    Takes tika format style and simplifies it for sorting and grouping
-    Input style format is:
-    'top1:121.11969px;start-font-size:4.1408234px;font-size:4.1408234px;font-family:RobotoRegular;font-style:normal;font-weight:normal;top:121.11969px;position:absolute;text-indent:384.37286px;word-start-positions:[(384.37286,121.11969,4.1408234,normal)];last-char:(466.20337, 121.11969);word-end-positions:[(466.20337,121.11969,4.1408234,normal)]'
-    Output style format is:
-    location aspects of the style
-    BoxStyle(top=121.12, left=384.37, width=0.0, height=4.14
-    line properties
-    LineStyle(line_height=4.14, font_family='RobotoRegular', font_style='normal', font_size=4.14, font_weight=400)
+    Takes tika format style and simplifies it for sorting and grouping Input style format is:
+    'top1:121.11969px;start-font-size:4.1408234px;font-size:4.1408234px;font-family:RobotoRegular;font-style:normal
+    ;font-weight:normal;top:121.11969px;position:absolute;text-indent:384.37286px;word-start-positions:[(384.37286,
+    121.11969,4.1408234,normal)];last-char:(466.20337, 121.11969);word-end-positions:[(466.20337,121.11969,4.1408234,
+    normal)]' Output style format is: location aspects of the style BoxStyle(top=121.12, left=384.37, width=0.0,
+    height=4.14 line properties LineStyle(line_height=4.14, font_family='RobotoRegular', font_style='normal',
+    font_size=4.14, font_weight=400)
     """
 
     input_style = get_style_kv(style_str)
@@ -23,7 +31,6 @@ def parse_tika_style(style_str: str, text_str: str, page_width: float) -> dict:
     word_fonts = input_style["word-fonts"][2:-2].split("), (")
     left = round(float(word_start_pos[0].split(",")[0]), 2)
     right = round(float(word_end_pos[-1].split(",")[0]), 2)
-    # height = parse_px(input_style['height'])
     font_size_height = parse_px(input_style['font-size'])
     if right < left:
         # We have some issues here with Tika
@@ -58,8 +65,6 @@ def parse_tika_style(style_str: str, text_str: str, page_width: float) -> dict:
     font_weight = input_style['font-weight']
     font_weight = get_numeric_font_weight(font_family, font_weight)
     font_size = round(font_scale * font_size_height, 1)
-    text_transform = 'none'  # "uppercase" if text_str.isupper() else "none"
-    text_align = 'left'  # "center" if is_center_aligned else "left"
     font_space_width = 1.5
     word_line_styles = []
     for wf_idx, wf in enumerate(word_fonts):
@@ -91,9 +96,7 @@ def parse_tika_style(style_str: str, text_str: str, page_width: float) -> dict:
         font_space_width,
         text_align
     )
-    # print(word_start_pos[1])
-    # for word_font in word_fonts:
-    #     print(word_font)
+
     return box_style, line_style, word_line_styles
 
 
@@ -111,10 +114,8 @@ def get_numeric_font_weight(font_family, font_weight):
     if font_weight in font_weights:
         font_weight = font_weights[font_weight]
     for key in font_families.keys():
-        # print("-", key, font_family, font_weight)
         if font_family.lower().find(key) != -1:
             font_weight = font_families[key]
-        # print(key, font_family, font_weight)
     if font_family.lower().endswith(".b"):
         font_weight = font_weights["bold"]
     return round(float(font_weight))
@@ -212,9 +213,8 @@ def format_p_tag(p, filter_out_pattern, filter_ls_pattern, soup):
                     input_style['font-style'] = font_style
                 input_style[key] = input_style[key][new_p_end_idx + 1:]
             input_style[key] = "[(" + "), (".join(input_style[key]) + ")]"
+
         # Create string out of dictionary
         p["style"] = ";".join([":".join([key, str(val)]) for key, val in input_style.items()])
 
     return new_p, changed
-
-
