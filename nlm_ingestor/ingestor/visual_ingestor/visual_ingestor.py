@@ -203,6 +203,7 @@ class Doc:
             prev_line_style = None
             page_line_stats = {}
             prev_p_tag = None
+
             for line_idx, orig_p in enumerate(all_p):
 
                 # NOTE: orig_p is actually a some chunk of N words and style has absolute positional coordinates.
@@ -337,6 +338,7 @@ class Doc:
                     prev_p_tag = p
                     changed = False  # Reset the change here. Change is meant for only the first p_tag
             page_p_styles.append(p_styles)
+
             # Calculate the page stats.
             # Max number of lines and most frequent space gaps between lines etc
             max_lines = 0
@@ -639,8 +641,10 @@ class Doc:
             for annot_id, b in enumerate(self.blocks):
                 search_tokens = self.pawls_pages[b['page_idx']]['tokens']
                 bbox = b['box_style']
+                print(f"Page {page_idx} Annotation_id block: {b['box_style']}")
                 block = (bbox.left, bbox.top, bbox.right, bbox.top + bbox.height)
                 token_ids_in_block = find_tokens_in_block(search_tokens, block)
+                print(f"Token ids: {token_ids_in_block}")
                 annotation_json: dict[int, OpenContractsSinglePageAnnotationType] = {
                     int(b['page_idx']): {
                         'bounds': {

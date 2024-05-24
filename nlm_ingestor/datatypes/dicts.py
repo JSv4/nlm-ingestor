@@ -140,7 +140,7 @@ class OpenContractCorpusType(OpenContractCorpusTemplateType):
 
 
 class OpenContractsLabelSetType(TypedDict):
-    id: int | str
+    id: Union[int, str]
     title: str
     description: str
     icon_data: Optional[str]
