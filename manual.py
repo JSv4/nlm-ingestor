@@ -10,10 +10,10 @@ import nltk
 from nlm_ingestor.datatypes.dicts import AnnotationLabelPythonType, OpenContractsExportDataJsonPythonType, \
     OpenContractsLabelSetType, OpenContractCorpusType
 from nlm_ingestor.datatypes.enums import BlockTypes, LabelType
-from nlm_ingestor.file_parser import markdown_parser
 
-nltk.download('punkt')
-nltk.download('stopwords')
+# Downloaded to C:\Users\scrud\AppData\Roaming\nltk_data
+# nltk.download('punkt')
+# nltk.download('stopwords')
 
 import logging
 
