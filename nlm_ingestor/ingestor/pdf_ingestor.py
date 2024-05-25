@@ -95,7 +95,6 @@ def parse_pdf(doc_location, parse_options):
     else:
         wall_time = default_timer() * 1000
         parsed_content = pdf_file_parser.parse_to_html(doc_location, do_ocr=True)
-        pprint(parsed_content)
         parse_and_apply_hocr(parsed_content)
         logger.info(
             f"PDF OCR finished in {default_timer() * 1000 - wall_time:.4f}ms on workspace",
@@ -134,6 +133,11 @@ def parse(parsed_content):
             word_end_positions_str = p_kv.get("word-end-positions", '[]')[1:-1]
             word_end_positions = get_word_positions(word_end_positions_str)
 
+            print(f"# of word start positions: {len(word_start_positions)}")
+            print(f"# of word end positions: {len(word_end_positions)}")
+            print(f"# of words {len(words)}")
+            print(f"# of word start positions: {len(word_start_positions)}")
+
             assert len(word_start_positions) == len(word_end_positions)
             assert len(words) == len(word_start_positions)
 
@@ -163,8 +167,6 @@ def parse_and_apply_hocr(parsed_content):
     pawls_pages = []
 
     for index, page in enumerate(pages):
-
-        print(f"Page: {page}")
 
         page_kv = get_kv_from_attr(page.get('style'), ":")
         page_height = float(page_kv['height'].replace("px", ""))
