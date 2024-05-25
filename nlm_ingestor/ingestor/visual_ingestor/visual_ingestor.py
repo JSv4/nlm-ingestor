@@ -190,7 +190,6 @@ class Doc:
 
             self.page_svg_tags.append([lines_tag_list, rect_tag_list])
 
-            print(F"Page_style_kv for page {page_idx}: {page_style_kv}")
             page_width = style_utils.parse_px(page_style_kv["width"])
             self.page_width = self.page_width or page_width
             page_height = style_utils.parse_px(page_style_kv["height"])
@@ -208,12 +207,11 @@ class Doc:
 
                 # NOTE: orig_p is actually a some chunk of N words and style has absolute positional coordinates.
 
-                print(f"orig_p {line_idx}: {orig_p}")
-                # Nlm-ingestor filters out certain symbols and whitespace, but
-                # we don't want to do that for OpenContracts data, primarily because
-                # a) the word position lists don't appear to get filtered so we lose
-                # the ability to tie word to its x,y coords.
-                orig_words = []
+                # Nlm-ingestor filters out certain symbols and whitespace and edit the extracted xml to help build the
+                # structural blocks. That's fine as we ultimately can rely on the produced x,y,x,y bounding boxes BUT
+                # We need un-edited tokens for the annotations and tokens so they map rationally to the document.
+                # For OpenContracts data, we need a) the word position lists and <p> text as they were originally so
+                # we can match each token with its x,y coords.
                 if self.calculate_opencontracts_data:
                     orig_words = orig_p.text.split()
                     orig_p_kv = get_kv_from_attr(orig_p.get('style'), ":")
@@ -272,32 +270,11 @@ class Doc:
                                 last_line_counts[text_only] = last_line_counts[text_only] + 1
 
                     p_kv = get_kv_from_attr(p.get('style'), ":")
-                    print(f"P: {p}")
-                    print(f"P.text: {p.text}")
-                    print(f"P.contents: {p.contents}")
-                    print(f"P.get_text(): {p.get_text(separator='')}")
-                    print(f"P.decode_contents(): {p.decode_contents()}")
-                    print(f"Dir p {dir(p)}")
-                    print(type(p))
 
-                    height = float(p_kv.get('height', 0))
-                    font_size = float(p_kv.get('font-size', '0px').replace("px", ""))
                     word_start_positions_str = p_kv.get("word-start-positions", '[]')[1:-1]
                     word_start_positions = get_word_positions(word_start_positions_str)
                     word_end_positions_str = p_kv.get("word-end-positions", '[]')[1:-1]
                     word_end_positions = get_word_positions(word_end_positions_str)
-
-                    print(f"visual_ingestor line 250: word_start_positions: {len(word_start_positions)}")
-                    print(f"visual_ingestor line 250: word_end_positions: {len(word_end_positions)}")
-                    print(f"Orig p: {orig_p}")
-                    print(f"P: {p}")
-                    print(f"{len(orig_words)} orig words: {orig_words}")
-                    print(f"word start pos {len(word_start_positions)}: {word_start_positions}")
-
-
-
-
-                    # TODO - add maps to map token ids and paragraph ids to bbox
 
                     box_style, line_style, word_line_styles = style_utils.parse_tika_style(
                         p["style"], p.text, page_width
@@ -453,7 +430,7 @@ class Doc:
             # figure out page
             all_p = page.find_all("p")
             if PROGRESS_DEBUG:
-                print('processing page: ', page_idx, " Number of p_tags.... ", len(all_p))
+                print('Processing page ', page_idx, " - # of p_tags: ", len(all_p))
             line_idx = 0
             oo_present = False
             prev_filter_ignore = False
@@ -2156,7 +2133,7 @@ class Doc:
             new_page = prev_block and prev_block["page_idx"] != block["page_idx"]
             if new_page:
                 if PROGRESS_DEBUG:
-                    print('processing blocks in page: ', block["page_idx"])
+                    print('Processing blocks on page ', block["page_idx"])
                 svg_page_tags = self.page_svg_tags[block["page_idx"]]
 
             probable_table_block = False  # self.check_block_within_svg_tags(block, prev_block)
