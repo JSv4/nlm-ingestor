@@ -20,8 +20,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 from nlm_ingestor.ingestor import pdf_ingestor
 
-doc_loc = 'sample.pdf'
-
+# doc_loc = 'sample.pdf'
+doc_loc = "full NVCA.pdf"
 
 def generate_labels() -> dict[str, AnnotationLabelPythonType]:
     annotation_label_jsons: dict[str, AnnotationLabelPythonType] = {}
@@ -62,7 +62,6 @@ os.environ["TIKA_SERVER_ENDPOINT"] = "http://localhost:9998"
 # This would be called by ingestor_api.py if mime_type == "application/pdf"
 ingestor = pdf_ingestor.PDFIngestor(doc_loc, {"apply_ocr": True, "calculate_opencontracts_data": True})
 open_contracts_data = ingestor.open_contracts_data
-print(open_contracts_data)
 
 with open(doc_loc, 'rb') as pdf_file:
     pdf_data = pdf_file.read()

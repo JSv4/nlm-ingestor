@@ -37,7 +37,6 @@ if __name__ == "__main__":
 
     try:
         response = submit_pdf(file_path, api_url, api_key)
-        pprint.pprint(response)
         with open("sample_nlm_ingestor_output.json", "w") as f:
             f.write(json.dumps(response, indent=4))
     except Exception as e:

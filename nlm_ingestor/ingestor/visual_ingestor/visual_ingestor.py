@@ -209,6 +209,40 @@ class Doc:
                 # NOTE: orig_p is actually a some chunk of N words and style has absolute positional coordinates.
 
                 print(f"orig_p {line_idx}: {orig_p}")
+                # Nlm-ingestor filters out certain symbols and whitespace, but
+                # we don't want to do that for OpenContracts data, primarily because
+                # a) the word position lists don't appear to get filtered so we lose
+                # the ability to tie word to its x,y coords.
+                orig_words = []
+                if self.calculate_opencontracts_data:
+                    orig_words = orig_p.text.split()
+                    orig_p_kv = get_kv_from_attr(orig_p.get('style'), ":")
+                    oc_font_size = float(orig_p_kv.get('font-size', '0px').replace("px", ""))
+                    oc_word_start_positions_str = orig_p_kv.get("word-start-positions", '[]')[1:-1]
+                    oc_word_start_positions = get_word_positions(oc_word_start_positions_str)
+                    oc_word_end_positions_str = orig_p_kv.get("word-end-positions", '[]')[1:-1]
+                    oc_word_end_positions = get_word_positions(oc_word_end_positions_str)
+
+                    assert len(oc_word_start_positions) == len(oc_word_end_positions)
+                    assert len(orig_words) == len(oc_word_start_positions)
+
+                    for index, w in enumerate(orig_words):
+                        x0, y0 = oc_word_start_positions[index]
+                        x1, y1 = oc_word_end_positions[index]
+                        pawls_page['tokens'].append({
+                            "x": x0,
+                            "y": y0,
+                            "width": x1 - x0,
+                            "height": oc_font_size,
+                            "text": w,
+                        })
+
+
+
+                        word_bbox_map[word_idx] = (x0, y0, x1, y1)
+                        token_id_to_page_map[word_idx] = page_idx
+                        page_id_to_token_map[page_idx] = word_idx
+                        word_idx += 1
 
                 # Reformat p if the text contains items to be replaced.
                 new_p = None
@@ -238,38 +272,30 @@ class Doc:
                                 last_line_counts[text_only] = last_line_counts[text_only] + 1
 
                     p_kv = get_kv_from_attr(p.get('style'), ":")
-                    words = p.text.split()
-                    print(f"Pkv: {p_kv}")
+                    print(f"P: {p}")
+                    print(f"P.text: {p.text}")
+                    print(f"P.contents: {p.contents}")
+                    print(f"P.get_text(): {p.get_text(separator='')}")
+                    print(f"P.decode_contents(): {p.decode_contents()}")
+                    print(f"Dir p {dir(p)}")
+                    print(type(p))
+
                     height = float(p_kv.get('height', 0))
                     font_size = float(p_kv.get('font-size', '0px').replace("px", ""))
                     word_start_positions_str = p_kv.get("word-start-positions", '[]')[1:-1]
                     word_start_positions = get_word_positions(word_start_positions_str)
-                    print(f"word_start_positions:\n\t{word_start_positions}")
                     word_end_positions_str = p_kv.get("word-end-positions", '[]')[1:-1]
                     word_end_positions = get_word_positions(word_end_positions_str)
-                    print(f"word_end_positions:\n\t{word_end_positions}")
 
-                    assert len(word_start_positions) == len(word_end_positions)
-                    assert len(words) == len(word_start_positions)
+                    print(f"visual_ingestor line 250: word_start_positions: {len(word_start_positions)}")
+                    print(f"visual_ingestor line 250: word_end_positions: {len(word_end_positions)}")
+                    print(f"Orig p: {orig_p}")
+                    print(f"P: {p}")
+                    print(f"{len(orig_words)} orig words: {orig_words}")
+                    print(f"word start pos {len(word_start_positions)}: {word_start_positions}")
 
-                    if self.calculate_opencontracts_data:
-                        print(f"Process run of {len(words)}")
-                        for index, w in enumerate(words):
-                            x0, y0 = word_start_positions[index]
-                            print(f"word start {x0}, {y0}")
-                            x1, y1 = word_end_positions[index]
-                            print(f"word end {x1}, {y1}")
-                            pawls_page['tokens'].append({
-                                "x": x0,
-                                "y": y0,
-                                "width": x1 - x0,
-                                "height": font_size,
-                                "text": w,
-                            })
-                            word_bbox_map[word_idx] = (x0, y0, x1, y1)
-                            token_id_to_page_map[word_idx] = page_idx
-                            page_id_to_token_map[page_idx] = word_idx
-                            word_idx += 1
+
+
 
                     # TODO - add maps to map token ids and paragraph ids to bbox
 
@@ -641,10 +667,10 @@ class Doc:
             for annot_id, b in enumerate(self.blocks):
                 search_tokens = self.pawls_pages[b['page_idx']]['tokens']
                 bbox = b['box_style']
-                print(f"Page {page_idx} Annotation_id block: {b['box_style']}")
+                # print(f"Page {page_idx} Annotation_id block: {b['box_style']}")
                 block = (bbox.left, bbox.top, bbox.right, bbox.top + bbox.height)
                 token_ids_in_block = find_tokens_in_block(search_tokens, block)
-                print(f"Token ids: {token_ids_in_block}")
+                # print(f"Token ids: {token_ids_in_block}")
                 annotation_json: dict[int, OpenContractsSinglePageAnnotationType] = {
                     int(b['page_idx']): {
                         'bounds': {
@@ -668,7 +694,6 @@ class Doc:
                 }
                 self.oc_annotations.append(annotation)
 
-        pprint.pprint(blocks[-1])
         self.blocks_by_page = blocks_by_page
         self.save_file_stats()
         self.organize_and_indent_blocks()
@@ -2085,7 +2110,7 @@ class Doc:
 
     def get_page_alignment(self, block):
         block_right = block['visual_lines'][-1]['box_style'][2]
-        print("alignment is ", self.page_width, block_right)
+        # print("alignment is ", self.page_width, block_right)
 
     def organize_and_indent_blocks(self, debug=False):
         prev_class_name = None

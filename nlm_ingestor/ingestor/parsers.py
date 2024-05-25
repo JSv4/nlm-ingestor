@@ -13,17 +13,17 @@ def find_tokens_in_block(tokens, block):
 
     for tok_index, token in enumerate(tokens):
 
-        print(f"Is token x {token['x']} >= x1 {x0 * (1 - fuzz_factor)}")
-        print(f"Is token y {token['y']} >= y1 {y0 * (1 - fuzz_factor)}")
-        print("Is token x2 " + str(token["x"] + token["width"]) + f" <= {x1 * (1 + fuzz_factor)}")
-        print(f"Is token y2 " + str(token["y"] + token["height"]) + f" <= {y1 * (1 + fuzz_factor)}")
+        # print(f"Is token x {token['x']} >= x1 {x0 * (1 - fuzz_factor)}")
+        # print(f"Is token y {token['y']} >= y1 {y0 * (1 - fuzz_factor)}")
+        # print("Is token x2 " + str(token["x"] + token["width"]) + f" <= {x1 * (1 + fuzz_factor)}")
+        # print(f"Is token y2 " + str(token["y"] + token["height"]) + f" <= {y1 * (1 + fuzz_factor)}")
 
         in_block = (token["x"] >= x0 * (1-fuzz_factor) and
                 token["y"] >= y0 * (1-fuzz_factor) and
                 (token["x"] + token["width"]) <= x1 * (1 + fuzz_factor) and
                 (token["y"] + token["height"]) <= y1 * (1+fuzz_factor))
 
-        print(f"Token: {token['text']} {token} in block {block}: {in_block}")
+        # print(f"Token: {token['text']} {token} in block {block}: {in_block}")
 
         if in_block:
             contained_tokens.append(tok_index)
@@ -32,10 +32,10 @@ def find_tokens_in_block(tokens, block):
 
 
 def get_word_positions(word_pos_str: str) -> list[tuple[float, float]]:
-    print(f"word_pos_str: {word_pos_str}")
+    # print(f"word_pos_str: {word_pos_str}")
     pattern = r'\(([-+]?\d*\.\d+),\s*([-+]?\d*\.\d+)\)'
     tuples = re.findall(pattern, word_pos_str)
-    print( [(float(x), float(y)) for x, y in tuples])
+    # print( [(float(x), float(y)) for x, y in tuples])
     return [(float(x), float(y)) for x, y in tuples]
 
 
