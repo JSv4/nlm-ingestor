@@ -1,0 +1,4 @@
+*.pdf
+*.zip
+*.jar
+!jars/tika-server-standard-nlm-modified-2.9.2_v2.jar

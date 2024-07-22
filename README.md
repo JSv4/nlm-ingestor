@@ -2,7 +2,6 @@
 
 This repo provides the service code for [llmsherpa](https://github.com/nlmatics/llmsherpa) API to connect. 
 This repo contains custom RAG (retrieval augmented generation) friendly parsers for the following file formats:
-
 ### PDF
 The PDF parser is a rule based parser which uses text co-ordinates (boundary box), graphics and font data from nlmatics modified version of tika found here https://github.com/nlmatics/nlm-tika.
 The PDF parser works off text layer and also offers a OCR option (apply_ocr) to automatically use OCR if there are scanned pages in your PDFs. The OCR feature is based off a nlmatics modified version of tika which uses tesseract underneath.
@@ -35,8 +34,8 @@ There are two ways to process these types of documents
 1. Install latest version of java from https://www.oracle.com/java/technologies/downloads/
 2. Run the tika server:
 ```
- java -jar <path_to_nlm_ingestor>/jars/tika-server-standard-nlm-modified-2.4.1_v6.jar
- java -jar "C:\Users\jscru\source\nlm-ingestor\jars\tika-server-standard-nlm-modified-2.4.1_v6.jar"
+ java -jar <path_to_nlm_ingestor>/jars/tika-server-standard-nlm-modified-2.9.2.jar
+ java -jar "C:\Users\jscru\source\nlm-ingestor\jars\tika-server-standard-nlm-modified-2.9.2_v2.jar"
 ```
 3. Install the ingestor
 ```
