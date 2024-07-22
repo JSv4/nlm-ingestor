@@ -33,7 +33,8 @@ def submit_pdf(file_path: str, api_url: str, api_key: str):
 if __name__ == "__main__":
     api_url = 'http://localhost:5001/api/parseDocument'
     api_key = 'abc123'
-    file_path = 'C:\\Users\\jscru\\Downloads\\sample.pdf'
+    # file_path = 'C:\\Users\\jscru\\Downloads\\sample.pdf'
+    file_path = "C:\\Users\\scrud\\source\\nlm-ingestor\\2017-2278.pdf"
 
     try:
         response = submit_pdf(file_path, api_url, api_key)

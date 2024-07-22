@@ -38,6 +38,8 @@ class PDFIngestor:
         calculate_opencontracts_data = parse_options.get("calculate_opencontracts_data", False)
 
         tika_html_doc = parse_pdf(doc_location, parse_options)
+        with open('tika.html', 'w', encoding='utf-8') as f:
+            f.write(json.dumps(tika_html_doc,indent=4))
 
         blocks, _block_texts, _sents, _file_data, result, page_dim, num_pages, open_contracts_data = parse_blocks(
             tika_html_doc,
@@ -95,6 +97,7 @@ def parse_pdf(doc_location, parse_options):
     else:
         wall_time = default_timer() * 1000
         parsed_content = pdf_file_parser.parse_to_html(doc_location, do_ocr=True)
+        pprint(parsed_content)
         parse_and_apply_hocr(parsed_content)
         logger.info(
             f"PDF OCR finished in {default_timer() * 1000 - wall_time:.4f}ms on workspace",
@@ -109,48 +112,67 @@ def parse(parsed_content):
     pawls_pages = []
 
     for index, page in enumerate(pages):
+        # print(f"Page {index}: {page}")
+        page_style = page.get('style', None)
+        if page_style is None:
+            # Sometimes, there is no style property. I am still not fully sure why this happens sometimes. I'm going
+            # to start documenting some corner-cases that seem to cause the error.
+            #
+            # 1) Empty page that is "acroform"
+            #   <div class="acroform"><ol>\t<li><ol type="signaturedata">\t<li signdata="date">2017-12-07T15:44:28+0100</li>\n</ol>\n</li>\n</ol>\n</div>
+            logger.warning(f"Page {index} has no style properties: {page}")
+            pawls_page = {
+                "page": {
+                    "width": 0,
+                    "height": 0,
+                    "index": index
+                },
+                "tokens": []
+            }
+        else:
 
-        page_kv = get_kv_from_attr(page.get('style'), ":")
-        page_height = float(page_kv['height'].replace("px", ""))
-        page_width = float(page_kv['width'].replace("px", ""))
+            page_kv = get_kv_from_attr(page.get('style'), ":")
+            # print(f"Page {index} kv: {page_kv}")
+            page_height = float(page_kv['height'].replace("px", ""))
+            page_width = float(page_kv['width'].replace("px", ""))
 
-        pawls_page = {
-            "page": {
-                "width": page_width,
-                "height": page_height,
-                "index": index
-            },
-            "tokens": []
-        }
+            pawls_page = {
+                "page": {
+                    "width": page_width,
+                    "height": page_height,
+                    "index": index
+                },
+                "tokens": []
+            }
 
-        ps = page.find_all("p")
-        for p in ps:
-            p_kv = get_kv_from_attr(p.get('style'), ":")
-            words = p.text.split()
-            word_start_positions_str = p_kv.get("word-start-positions", '[]')[1:-1]
-            word_start_positions = get_word_positions(word_start_positions_str)
+            ps = page.find_all("p")
+            for p in ps:
+                p_kv = get_kv_from_attr(p.get('style'), ":")
+                words = p.text.split()
+                word_start_positions_str = p_kv.get("word-start-positions", '[]')[1:-1]
+                word_start_positions = get_word_positions(word_start_positions_str)
 
-            word_end_positions_str = p_kv.get("word-end-positions", '[]')[1:-1]
-            word_end_positions = get_word_positions(word_end_positions_str)
+                word_end_positions_str = p_kv.get("word-end-positions", '[]')[1:-1]
+                word_end_positions = get_word_positions(word_end_positions_str)
 
-            print(f"# of word start positions: {len(word_start_positions)}")
-            print(f"# of word end positions: {len(word_end_positions)}")
-            print(f"# of words {len(words)}")
-            print(f"# of word start positions: {len(word_start_positions)}")
+                print(f"# of word start positions: {len(word_start_positions)}")
+                print(f"# of word end positions: {len(word_end_positions)}")
+                print(f"# of words {len(words)}")
+                print(f"# of word start positions: {len(word_start_positions)}")
 
-            assert len(word_start_positions) == len(word_end_positions)
-            assert len(words) == len(word_start_positions)
+                assert len(word_start_positions) == len(word_end_positions)
+                assert len(words) == len(word_start_positions)
 
-            for index, w in enumerate(words):
-                x0, y0 = word_start_positions[index]
-                x1, y1 = word_end_positions[index]
-                pawls_page['tokens'].append({
-                    "x": x0,
-                    "y": y0,
-                    "width": y1 - y0,
-                    "height": x1 - x0,
-                    "text": w,
-                })
+                for index, w in enumerate(words):
+                    x0, y0 = word_start_positions[index]
+                    x1, y1 = word_end_positions[index]
+                    pawls_page['tokens'].append({
+                        "x": x0,
+                        "y": y0,
+                        "width": y1 - y0,
+                        "height": x1 - x0,
+                        "text": w,
+                    })
 
         pawls_pages.append(pawls_page)
 
@@ -164,7 +186,6 @@ def parse_and_apply_hocr(parsed_content):
 
     soup = BeautifulSoup(str(parsed_content), "html.parser")
     pages = soup.find_all("div", class_='page')
-    pawls_pages = []
 
     for index, page in enumerate(pages):
 

@@ -35,7 +35,7 @@ def parse_document(
         return make_response(jsonify({"status": "fail", "reason": "Unauthorized"}), 401)
 
     render_format = request.args.get('renderFormat', 'all')
-    use_new_indent_parser = request.args.get('useNewIndentParser', 'no')
+    use_new_indent_parser = request.args.get('useNewIndentParser', 'yes')
     apply_ocr = request.args.get('applyOcr', 'no')
     calculate_opencontracts_data = request.args.get('calculate_opencontracts_data', "no")
     file = request.files['file']

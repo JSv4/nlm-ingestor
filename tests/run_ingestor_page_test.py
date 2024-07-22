@@ -69,9 +69,9 @@ def get_html(doc_id, doc_type):
         parsed = retrive_html(doc_id)
     if not parsed:
         file_location = retrive_pdf(doc_id)
-        print("parsing pdf")
+        # print("parsing pdf")
         parsed = parser.from_file(file_location, xmlContent=True)
-        print("pdf parsed")
+        # print("pdf parsed")
         if not os.path.exists("files/html"):
             os.makedirs("files/html")
         f = open(f"files/html/{doc_id}.html", "w")
